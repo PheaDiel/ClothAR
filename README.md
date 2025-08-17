@@ -1,11 +1,11 @@
-```ClothAR 👕📱
+**ClothAR 👕📱**
 
 Augmented Reality Clothing Try-On & Tailoring Reservation App
 
 ClothAR is a mobile application built with React Native (Expo) that allows users to virtually try on clothes using AR technology, browse inventory, place orders, and reserve tailoring services. The app also provides admin functionality for managing products and user accounts.
-`
 
-🛠️ Tech Stack
+
+**🛠️ Tech Stack**
 
 Frontend: React Native (Expo)
 
@@ -15,11 +15,11 @@ AR Integration: Expo Camera (planned ARKit/ARCore extensions)
 
 State Management: React Context API
 
-Backend (Pluggable): Firebase / Node.js + Express + MongoDB (to be integrated)`
+Backend (Pluggable): Firebase / Node.js + Express + MongoDB (to be integrated)
 
 ---
 
-✅ Roadmap
+**✅ Roadmap**
 
  Full AR clothing overlay integration (ARKit/ARCore)
 
@@ -29,6 +29,6 @@ Backend (Pluggable): Firebase / Node.js + Express + MongoDB (to be integrated)`
 
  Improved UI/UX for tailoring reservations
 
-📜 License
+**📜 License**
 
-This project is licensed under the MIT License.`
+This project is licensed under the MIT License. 
