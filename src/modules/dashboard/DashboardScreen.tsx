@@ -1,20 +1,39 @@
-import React, { useContext, useMemo, useState } from 'react';
+import React, { useContext, useMemo, useState, useEffect } from 'react';
 import { View, FlatList, StyleSheet, TouchableOpacity, Alert } from 'react-native';
-import { Searchbar, Chip, Text, Banner } from 'react-native-paper';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { Searchbar, Chip, Text, Banner, Button } from 'react-native-paper';
 import { InventoryContext } from '../../context/InventoryContext';
 import { AuthContext } from '../../context/AuthContext';
+import { CartContext } from '../../context/CartContext';
 import ItemCard from '../../modules/dashboard/components/ItemCard';
+import BusinessMap from '../../components/BusinessMap';
 import { Item } from '../../types';
 import { useNavigation } from '@react-navigation/native';
+import { getNumColumns, wp } from '../../utils/responsiveUtils';
+import { getBusinessLocation } from '../../services/mockApi';
+import { theme } from '../../theme/theme';
 
 export default function DashboardScreen({ navigation }: { navigation: any }) {
-  const { items } = useContext(InventoryContext);
-  const { user } = useContext(AuthContext);
-  const [query, setQuery] = useState('');
-  const [category, setCategory] = useState<string | null>(null);
-  const [bannerVisible, setBannerVisible] = useState(true);
+   const { items } = useContext(InventoryContext);
+   const { user } = useContext(AuthContext);
+   const { total, count } = useContext(CartContext);
+   const [query, setQuery] = useState('');
+   const [category, setCategory] = useState<string | null>(null);
+   const [businessLocation, setBusinessLocation] = useState<{ latitude: number; longitude: number; address: string; name: string } | null>(null);
 
-  const isGuest = user?.isGuest || false;
+   const isGuest = user?.isGuest || false;
+
+   useEffect(() => {
+     const fetchLocation = async () => {
+       try {
+         const location = await getBusinessLocation();
+         setBusinessLocation(location);
+       } catch (error) {
+         console.error('Failed to fetch business location:', error);
+       }
+     };
+     fetchLocation();
+   }, []);
 
   const categories = useMemo(() => Array.from(new Set(items.map(i => i.category))), [items]);
 
@@ -23,6 +42,8 @@ export default function DashboardScreen({ navigation }: { navigation: any }) {
     const matchesCat = category ? i.category === category : true;
     return matchesText && matchesCat;
   });
+
+  console.log('DEBUG: Dashboard items loaded:', items.length, 'filtered:', filtered.length);
 
   const handleItemPress = (item: Item) => {
     if (isGuest) {
@@ -46,72 +67,75 @@ export default function DashboardScreen({ navigation }: { navigation: any }) {
   };
 
   return (
-    <View style={styles.container}>
-      {isGuest && bannerVisible && (
-        <Banner
-          visible={bannerVisible}
-          actions={[
-            {
-              label: 'Create Account',
-              onPress: () => navigation.navigate('Register'),
-            },
-            {
-              label: 'Dismiss',
-              onPress: () => setBannerVisible(false),
-            },
-          ]}
-          icon="account-circle"
-        >
-          You're using the app as a guest. Some features may be limited.
-        </Banner>
-      )}
-      
-      <Searchbar
-        placeholder="Search items"
-        value={query}
-        onChangeText={setQuery}
-        style={{ margin: 12 }}
-      />
-      <View style={styles.chipContainer}>
-        <Chip
-          style={styles.chip}
-          onPress={() => setCategory(null)}
-          selected={category === null}
-        >
-          All
-        </Chip>
-        {categories.map(c => (
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <View style={styles.header}>
+        <Searchbar
+          placeholder="Search items"
+          value={query}
+          onChangeText={setQuery}
+          style={styles.searchBar}
+        />
+        <View style={styles.chipContainer}>
           <Chip
-            key={c}
             style={styles.chip}
-            onPress={() => setCategory(c)}
-            selected={category === c}
+            onPress={() => setCategory(null)}
+            selected={category === null}
           >
-            {c}
+            All
           </Chip>
-        ))}
+          {categories.map(c => (
+            <Chip
+              key={c}
+              style={styles.chip}
+              onPress={() => setCategory(c)}
+              selected={category === c}
+            >
+              {c}
+            </Chip>
+          ))}
+        </View>
       </View>
-      <FlatList
-        contentContainerStyle={{ padding: 12 }}
-        data={filtered}
-        keyExtractor={(i) => i.id}
-        renderItem={({ item }) => (
-          <TouchableOpacity onPress={() => handleItemPress(item)}>
-            <ItemCard item={item} />
-          </TouchableOpacity>
+
+      <View style={styles.content}>
+        {filtered.length > 0 ? (
+          <FlatList
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.listContainer}
+            data={filtered}
+            keyExtractor={(i) => i.id}
+            renderItem={({ item }) => (
+              <TouchableOpacity onPress={() => handleItemPress(item)} style={styles.itemContainer}>
+                <ItemCard item={item} />
+              </TouchableOpacity>
+            )}
+            decelerationRate="fast"
+            snapToAlignment="start"
+          />
+        ) : (
+          <View style={styles.noItemsContainer}>
+            <Text style={styles.noItemsText}>No items found</Text>
+          </View>
         )}
-        numColumns={2}
-      />
-      {filtered.length === 0 && (
-        <Text style={styles.noItemsText}>No items found</Text>
-      )}
-    </View>
+      </View>
+
+      <View style={styles.mapContainer}>
+        <BusinessMap location={businessLocation} />
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  chipContainer: { paddingHorizontal: 12, flexDirection: 'row', flexWrap: 'wrap' },
-  chip: { marginRight: 8, marginBottom: 8 },
-  noItemsText: { textAlign: 'center', marginTop: 20 }
-});
+    container: { flex: 1, backgroundColor: theme.colors.background },
+    header: { paddingHorizontal: wp(3), paddingTop: wp(3) },
+    searchBar: { marginBottom: wp(2) },
+    chipContainer: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: wp(2) },
+    chip: { marginRight: wp(2), marginBottom: wp(2), minHeight: 40 },
+    content: { flex: 1 },
+    listContainer: { padding: wp(3) },
+    itemContainer: { marginRight: wp(2) },
+    mapContainer: { flex: 1 },
+    noItemsContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    noItemsText: { textAlign: 'center', fontSize: wp(4) }
+   });
