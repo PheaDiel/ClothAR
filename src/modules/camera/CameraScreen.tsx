@@ -1,6 +1,7 @@
 // src/modules/camera/CameraScreen.tsx
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Alert, Dimensions, TouchableOpacity, ScrollView } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, Camera } from 'expo-camera';
 import { Button, Card, IconButton } from 'react-native-paper';
 import * as ScreenOrientation from 'expo-screen-orientation';
@@ -222,7 +223,7 @@ export default function CameraScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <CameraView
         ref={cameraRef}
         style={styles.camera}
@@ -238,21 +239,21 @@ export default function CameraScreen() {
             onContextCreate={(gl) => setupARScene(gl)}
           />
         )}
-        
+
         {cameraReady && (
           <View style={styles.buttonContainer}>
             <TouchableOpacity style={styles.controlButton} onPress={toggleCameraType}>
               <Text style={styles.controlText}>Flip</Text>
             </TouchableOpacity>
-            
+
             <TouchableOpacity style={styles.controlButton} onPress={toggleFlashMode}>
               <Text style={styles.controlText}>
                 Flash: {flashMode === 'on' ? 'ON' : 'OFF'}
               </Text>
             </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={[styles.captureButton, isLoading && styles.captureButtonDisabled]} 
+
+            <TouchableOpacity
+              style={[styles.captureButton, isLoading && styles.captureButtonDisabled]}
               onPress={handleCapture}
               disabled={isLoading}
             >
@@ -260,10 +261,10 @@ export default function CameraScreen() {
                 {isARMode ? 'Try On Clothing (AR)' : 'Capture Photo'}
               </Text>
             </TouchableOpacity>
-            
+
             {/* AR Controls */}
             <View style={styles.arControls}>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.arControlButton}
                 onPress={() => setShowClothingSelector(!showClothingSelector)}
               >
@@ -271,8 +272,8 @@ export default function CameraScreen() {
                   {selectedClothing ? selectedClothing.name : 'Select Clothing'}
                 </Text>
               </TouchableOpacity>
-              
-              <TouchableOpacity 
+
+              <TouchableOpacity
                 style={styles.arControlButton}
                 onPress={() => toggleArSetting('showGrid')}
               >
@@ -280,8 +281,8 @@ export default function CameraScreen() {
                   Grid: {arSettings.showGrid ? 'ON' : 'OFF'}
                 </Text>
               </TouchableOpacity>
-              
-              <TouchableOpacity 
+
+              <TouchableOpacity
                 style={styles.arControlButton}
                 onPress={() => toggleArSetting('showLandmarks')}
               >
@@ -293,21 +294,21 @@ export default function CameraScreen() {
           </View>
         )}
       </CameraView>
-      
+
       {!cameraReady && (
         <View style={styles.loadingContainer}>
           <Text style={styles.loadingText}>Loading camera...</Text>
         </View>
       )}
-      
+
       <View style={styles.infoContainer}>
         <Text style={styles.infoText}>
-          {isARMode 
-            ? 'AR Mode: Point the camera at yourself to try on clothing virtually' 
+          {isARMode
+            ? 'AR Mode: Point the camera at yourself to try on clothing virtually'
             : 'AR not supported on this device. Using standard camera mode.'}
         </Text>
       </View>
-      
+
       {/* Clothing Selector Modal */}
       {showClothingSelector && (
         <View style={styles.modalContainer}>
@@ -333,7 +334,7 @@ export default function CameraScreen() {
           </View>
         </View>
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 
