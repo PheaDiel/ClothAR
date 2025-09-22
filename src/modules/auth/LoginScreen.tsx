@@ -4,6 +4,8 @@ import { TextInput, Button, Text, useTheme, Divider } from 'react-native-paper';
 import { AuthContext } from '../../context/AuthContext';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useNavigation } from '@react-navigation/native';
+import { wp, hp, rf } from '../../utils/responsiveUtils';
+import PasswordInput from '../../components/PasswordInput';
 
 export default function LoginScreen() {
   const { login, proceedAsGuest } = useContext(AuthContext);
@@ -29,7 +31,7 @@ export default function LoginScreen() {
     <ScrollView contentContainerStyle={styles.container}>
       <KeyboardAvoidingView style={styles.container}>
         <View style={styles.card}>
-          <Text style={styles.title}>Welcome</Text>
+          <Text style={styles.title}>Welcome to ClothAR</Text>
           <Text style={styles.subtitle}>Sign in to continue</Text>
           
           <TextInput 
@@ -40,11 +42,10 @@ export default function LoginScreen() {
             keyboardType="email-address" 
             style={styles.input}
           />
-          <TextInput 
-            label="Password" 
-            value={password} 
-            onChangeText={setPassword} 
-            secureTextEntry 
+          <PasswordInput
+            label="Password"
+            value={password}
+            onChangeText={setPassword}
             style={styles.input}
           />
           
@@ -88,16 +89,16 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { 
-    flex: 1, 
-    justifyContent: 'center', 
-    padding: 16, 
-    backgroundColor: '#FBFCFF' 
+  container: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: wp(4),
+    backgroundColor: '#FBFCFF'
   },
-  card: { 
-    backgroundColor: '#FFF', 
-    padding: 24, 
-    borderRadius: 12, 
+  card: {
+    backgroundColor: '#FFF',
+    padding: wp(6),
+    borderRadius: 12,
     elevation: 4,
     shadowColor: '#000',
     shadowOffset: {
@@ -107,44 +108,46 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
   },
-  title: { 
-    fontSize: 28, 
+  title: {
+    fontSize: rf(28),
     fontWeight: 'bold',
     textAlign: 'center',
-    marginBottom: 8,
+    marginBottom: wp(2),
     color: '#333'
   },
   subtitle: {
-    fontSize: 16,
+    fontSize: rf(16),
     textAlign: 'center',
-    marginBottom: 24,
+    marginBottom: wp(6),
     color: '#666'
   },
   input: {
-    marginBottom: 16
+    marginBottom: wp(4)
   },
   button: {
-    marginTop: 12,
-    paddingVertical: 8
+    marginTop: wp(3),
+    paddingVertical: wp(3)
   },
   secondaryButton: {
-    marginTop: 12
+    marginTop: wp(3),
+    paddingVertical: wp(3)
   },
   divider: {
-    marginVertical: 24
+    marginVertical: wp(6)
   },
   guestTitle: {
-    fontSize: 18,
+    fontSize: rf(18),
     fontWeight: '600',
     textAlign: 'center',
-    marginBottom: 8
+    marginBottom: wp(2)
   },
   guestDescription: {
     textAlign: 'center',
-    marginBottom: 16,
+    marginBottom: wp(4),
     color: '#666'
   },
   guestButton: {
-    marginTop: 8
+    marginTop: wp(2),
+    paddingVertical: wp(3)
   }
 });
