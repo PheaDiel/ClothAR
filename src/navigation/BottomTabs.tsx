@@ -1,6 +1,7 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
+import { hp } from '../utils/responsiveUtils';
 
 // Import your screens
 import DashboardScreen from '../modules/dashboard/DashboardScreen';
@@ -20,8 +21,12 @@ export default function BottomTabs() {
           backgroundColor: '#fff',
           borderTopWidth: 0,
           elevation: 5,
-          paddingBottom: 4,
-          height: 60,
+          paddingBottom: hp(1),
+          height: hp(9),
+        },
+        tabBarLabelStyle: {
+          fontSize: 12,
+          fontWeight: 'bold',
         },
         tabBarIcon: ({ color, size }) => {
           let iconName: keyof typeof Ionicons.glyphMap = 'home-outline'; // Default icon
@@ -36,7 +41,7 @@ export default function BottomTabs() {
             iconName = 'person-outline';
           }
 
-          return <Ionicons name={iconName} size={size} color={color} />;
+          return <Ionicons name={iconName} size={28} color={color} />;
         },
       })}
     >
