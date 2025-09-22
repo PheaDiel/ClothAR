@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { View, TextInput, StyleSheet, Button, Alert } from "react-native";
 import AppHeader from "../../components/AppHeader";
+import { wp } from "../../utils/responsiveUtils";
 
 export default function InventoryFormScreen({ navigation }: any) {
   const [name, setName] = useState("");
@@ -33,11 +34,11 @@ export default function InventoryFormScreen({ navigation }: any) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16 },
+  container: { flex: 1, padding: wp(4) },
   input: {
     borderWidth: 1,
     borderColor: "#ccc",
-    padding: 8,
-    marginBottom: 12
+    padding: wp(2),
+    marginBottom: wp(3)
   }
 });

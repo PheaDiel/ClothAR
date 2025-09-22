@@ -11,9 +11,10 @@ function convertClothingItemToItem(clothingItem: ClothingItem): Item {
     id: clothingItem.id,
     name: clothingItem.name,
     price: clothingItem.price,
-    images: [clothingItem.image], // Convert single image to array
+    images: clothingItem.images, // Already an array
     category: "Clothing", // Default category
-    sizes: clothingItem.stock, // Stock format is compatible with sizes
+    sizes: Object.keys(clothingItem.stock), // Get sizes from stock keys
+    stock: clothingItem.stock, // Keep stock
   };
 }
 
