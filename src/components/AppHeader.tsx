@@ -1,6 +1,7 @@
 // src/components/AppHeader.tsx
 import React from "react";
 import { View, Text, StyleSheet } from "react-native";
+import { wp, rf } from "../utils/responsiveUtils";
 
 interface Props {
   title: string;
@@ -17,11 +18,11 @@ export default function AppHeader({ title }: Props) {
 const styles = StyleSheet.create({
   header: {
     backgroundColor: "#6200ee",
-    padding: 16
+    padding: wp(5)
   },
   title: {
     color: "#fff",
-    fontSize: 20,
+    fontSize: rf(24),
     fontWeight: "bold"
   }
 });
