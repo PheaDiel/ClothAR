@@ -2,13 +2,17 @@
 import React, { createContext, ReactNode, useState } from 'react';
 
 export type CartEntry = {
-  id: string; // item id
-  name: string;
-  price: number;
-  size?: string;
-  quantity: number;
-  image?: string;
-};
+   itemId: string; // item id
+   name: string;
+   price: number;
+   measurementId: string;
+   measurementName: string;
+   quantity: number;
+   image?: string;
+   fabricType?: string;
+   materialProvidedByCustomer?: boolean;
+   materialFee?: number;
+  };
 
 type CartContextType = {
   items: CartEntry[];
@@ -34,8 +38,8 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
   const [items, setItems] = useState<CartEntry[]>([]);
 
   const add = (entry: CartEntry) => {
-    // merge same item+size
-    const idx = items.findIndex((i) => i.id === entry.id && i.size === entry.size);
+    // merge same item+measurement
+    const idx = items.findIndex((i) => i.itemId === entry.itemId && i.measurementId === entry.measurementId);
     if (idx >= 0) {
       const copy = [...items];
       copy[idx].quantity += entry.quantity;
@@ -57,7 +61,7 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
 
   const clear = () => setItems([]);
 
-  const total = () => items.reduce((acc, i) => acc + i.price * i.quantity, 0);
+  const total = () => items.reduce((acc, i) => acc + (i.price + (i.materialFee || 0)) * i.quantity, 0);
 
   const count = () => items.reduce((acc, i) => acc + i.quantity, 0);
 
