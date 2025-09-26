@@ -14,7 +14,7 @@
 
 <p align="center"><strong>State Management:</strong> React Context API</p> 
 
-<p align="center"><strong>Backend (Pluggable):</strong> Firebase / Node.js + Express + MongoDB (to be integrated)</p> 
+<p align="center"><strong>Backend (Pluggable):</strong> Supabase (to be integrated)</p> 
 
 ---
 
