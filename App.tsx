@@ -1,20 +1,28 @@
-import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+// App.tsx (root)
+import React from 'react';
+import { Provider as PaperProvider } from 'react-native-paper';
+import { NavigationContainer } from '@react-navigation/native';
+import RootNavigator from './src/navigation';
+import { AuthProvider } from './src/context/AuthContext';
+import { InventoryProvider } from './src/context/InventoryContext';
+import { CartProvider } from './src/context/CartContext';
+import { NotificationProvider } from './src/context/NotificationContext';
+import { theme, navigationTheme } from './src/theme/theme';
 
 export default function App() {
   return (
-    <View style={styles.container}>
-      <Text>Open up App.tsx to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
+    <NotificationProvider>
+      <AuthProvider>
+        <InventoryProvider>
+          <CartProvider>
+            <PaperProvider theme={theme}>
+              <NavigationContainer theme={navigationTheme}>
+                <RootNavigator />
+              </NavigationContainer>
+            </PaperProvider>
+          </CartProvider>
+        </InventoryProvider>
+      </AuthProvider>
+    </NotificationProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});
