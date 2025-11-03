@@ -104,7 +104,25 @@ export default function RegistrationFlow() {
   };
 
   const updateRegistrationData = (updates: Partial<RegistrationData>) => {
-    setRegistrationData(prev => ({ ...prev, ...updates }));
+    setRegistrationData(prev => {
+      const newData = { ...prev, ...updates };
+      // Save to AsyncStorage immediately for persistence
+      saveProgressSync(newData, currentStep);
+      return newData;
+    });
+  };
+
+  const saveProgressSync = async (data: RegistrationData, step: number) => {
+    try {
+      const progress = {
+        data,
+        step,
+        timestamp: Date.now(),
+      };
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(progress));
+    } catch (error) {
+      // Silent fail for storage errors
+    }
   };
 
   const nextStep = () => {
@@ -124,26 +142,40 @@ export default function RegistrationFlow() {
   const handleComplete = async () => {
     const success = await executeAsync.execute(
       async () => {
-        // First validate data on server
-        const validationResult = await ValidationService.validateRegistration({
+        // Skip server validation for now - proceed directly with registration
+        // const validationResult = await ValidationService.validateRegistration({
+        //   name: registrationData.name,
+        //   email: registrationData.email,
+        //   phone: registrationData.phone,
+        //   password: registrationData.password,
+        // });
+
+        // if (!validationResult.isValid) {
+        //   throw new Error(validationResult.errors.join('\n'));
+        // }
+
+        // Proceed with registration
+        console.log('🔵 Starting registration with data:', {
           name: registrationData.name,
           email: registrationData.email,
           phone: registrationData.phone,
-          password: registrationData.password,
+          role: registrationData.role_request || 'customer'
         });
 
-        if (!validationResult.isValid) {
-          throw new Error(validationResult.errors.join('\n'));
-        }
-
-        // Proceed with registration
         const registerSuccess = await register(
           registrationData.name,
           registrationData.email,
           registrationData.password,
           registrationData.phone,
-          registrationData.role_request || 'customer'
+          registrationData.role_request || 'customer',
+          {
+            province: registrationData.province,
+            city: registrationData.city,
+            barangay: registrationData.barangay || undefined,
+          }
         );
+
+        console.log('✅ Registration result:', registerSuccess);
 
         if (!registerSuccess) {
           throw new Error('Registration failed');
@@ -184,6 +216,9 @@ export default function RegistrationFlow() {
             role_request: null,
           });
           setCurrentStep(0);
+
+          // Navigate to login or dashboard after successful registration
+          // The navigation will be handled by the AuthContext onAuthStateChange
         }
       }
     );

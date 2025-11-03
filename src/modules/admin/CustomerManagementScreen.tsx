@@ -21,7 +21,7 @@ interface Customer {
   name: string;
   email: string;
   phone?: string;
-  role: 'customer' | 'tailor' | 'shop_owner';
+  role: 'customer' | 'admin';
   role_status: 'pending' | 'approved' | 'rejected';
   province_name?: string;
   city_name?: string;
@@ -40,7 +40,7 @@ const CustomerManagementScreen = () => {
   const [roleFilter, setRoleFilter] = useState<string | null>(null);
   const [chatConversations, setChatConversations] = useState<any[]>([]);
 
-  const roles = ['customer', 'tailor', 'shop_owner'];
+  const roles = ['customer', 'admin'];
 
   useEffect(() => {
     loadCustomers();
@@ -66,8 +66,8 @@ const CustomerManagementScreen = () => {
         .eq('id', user.id)
         .single();
 
-      if (!['admin', 'shop_owner'].includes(profile?.role)) {
-        Alert.alert('Error', 'Unauthorized to view customers');
+      if (!['admin'].includes(profile?.role)) {
+        Alert.alert('Error', 'Unauthorized to view customers. Admin access required.');
         return;
       }
 

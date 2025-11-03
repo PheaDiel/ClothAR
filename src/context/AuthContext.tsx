@@ -9,7 +9,7 @@ import { useToast } from './ToastContext';
 type AuthContextType = {
    user: User | null;
    login: (email: string, password: string) => Promise<boolean>;
-   register: (name: string, email: string, password: string, phone: string, roleRequest: string) => Promise<boolean>;
+   register: (name: string, email: string, password: string, phone: string, roleRequest: string, addressData?: { province?: any; city?: any; barangay?: string }) => Promise<boolean>;
    updateProfile: (updates: Partial<User>) => Promise<boolean>;
    logout: () => Promise<void>;
    proceedAsGuest: () => Promise<void>;
@@ -69,6 +69,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
               created_at: profile.created_at,
               updated_at: profile.updated_at,
               is_admin: profile.is_admin || false,
+              avatar_url: profile.avatar_url,
             };
             setUser(user);
             console.log('✅ AuthContext: User state set:', user.id);
@@ -95,7 +96,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        console.log('🔄 AuthContext: Auth state change:', event, !!session);
+        console.log('🔄 AuthContext: Auth state change:', event, !!session, session?.user?.id);
 
         if (event === 'SIGNED_IN' && session?.user) {
           console.log('🔄 AuthContext: User signed in, fetching profile...');
@@ -128,6 +129,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
               created_at: profile.created_at,
               updated_at: profile.updated_at,
               is_admin: profile.is_admin || false,
+              avatar_url: profile.avatar_url,
             };
             setUser(user);
             console.log('✅ AuthContext: User state updated on sign in:', user.id);
@@ -172,16 +174,34 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  const register = async (name: string, email: string, password: string, phone: string, roleRequest: string) => {
+  const register = async (name: string, email: string, password: string, phone: string, roleRequest: string, addressData?: { province?: any; city?: any; barangay?: string }) => {
     try {
       console.log('🔵 Starting secure registration...');
 
-      // Use secure registration with password validation
-      const result = await SecureAuth.signUp(email, password, {
+      // Prepare metadata with address data if provided
+      const metadata: any = {
         name,
         phone,
         role: roleRequest,
-      });
+      };
+
+      if (addressData) {
+        if (addressData.province) {
+          metadata.province_code = addressData.province.code;
+          metadata.province_name = addressData.province.name;
+        }
+        if (addressData.city) {
+          metadata.city_code = addressData.city.code;
+          metadata.city_name = addressData.city.name;
+        }
+        if (addressData.barangay) {
+          metadata.barangay = addressData.barangay;
+        }
+        metadata.profile_complete = true;
+      }
+
+      // Use secure registration with password validation
+      const result = await SecureAuth.signUp(email, password, metadata);
 
       console.log('✅ Secure registration successful, user ID:', result.user?.id);
 
@@ -204,14 +224,23 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
           if (fetched) {
             profile = fetched;
+            console.log('✅ Profile found on attempt', attempt, ':', profile);
             break;
           }
 
           if (fetchError) {
+            console.log(`⚠️ Profile fetch error on attempt ${attempt}:`, fetchError);
             // PGRST116 = No rows found; keep polling. Other errors should surface.
             if ((fetchError as any).code && (fetchError as any).code !== 'PGRST116') {
-              console.error('❌ Profile fetch error:', fetchError);
-              throw fetchError;
+              console.error('❌ Profile fetch error (non-404):', fetchError);
+              // Log detailed error information
+              console.error('❌ Error details:', {
+                code: (fetchError as any).code,
+                message: fetchError.message,
+                details: fetchError.details,
+                hint: fetchError.hint
+              });
+              throw new Error(`Database error saving new user: ${fetchError.message || 'Unknown database error'}`);
             }
           }
 
@@ -219,7 +248,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         }
 
         if (!profile) {
-          throw new Error('Profile was not created by trigger. Please ensure migrations were applied.');
+          console.error('❌ Profile creation timeout after', maxAttempts, 'attempts');
+          throw new Error('Secure registration error: [AuthApiError: Database error saving new user]');
         }
 
         console.log('✅ Profile found:', profile);
@@ -239,6 +269,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           profileComplete: profile.profile_complete,
           created_at: profile.created_at,
           updated_at: profile.updated_at,
+          avatar_url: profile.avatar_url,
         };
         console.log('🎯 Setting user state:', newUser);
         setUser(newUser);
@@ -252,6 +283,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       // Handle password policy errors specifically
       if (error.message?.includes('Password validation failed')) {
         showError('Password Requirements: ' + error.message);
+      } else if (error.message?.includes('Database error saving new user')) {
+        showError('Registration failed: Database error. Please try again.');
+      } else if (error.message?.includes('Secure registration error')) {
+        showError('Registration failed: Unable to create user profile. Please try again.');
       } else {
         showError(error.message || 'Please try again.');
       }
@@ -280,9 +315,33 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const logout = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) console.error('Logout error:', error);
+    console.log('🔄 AuthContext: Logout initiated');
+    try {
+      console.log('🔄 AuthContext: Calling supabase.auth.signOut()...');
+
+      // Create a promise with timeout
+      const signOutPromise = supabase.auth.signOut();
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('SignOut timeout')), 5000)
+      );
+
+      const { error } = await Promise.race([signOutPromise, timeoutPromise]) as any;
+      console.log('🔄 AuthContext: signOut() returned, error:', error);
+
+      if (error) {
+        console.error('❌ AuthContext: Logout error:', error);
+        // Continue with local logout even if Supabase fails
+      } else {
+        console.log('✅ AuthContext: Supabase signOut successful');
+      }
+    } catch (error) {
+      console.error('❌ AuthContext: Exception during signOut:', error);
+      // Continue with local logout even if Supabase fails
+    }
+
+    console.log('🔄 AuthContext: Setting user to null');
     setUser(null);
+    console.log('✅ AuthContext: User state set to null');
   };
 
   const proceedAsGuest = async () => {

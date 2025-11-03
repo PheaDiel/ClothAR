@@ -65,8 +65,8 @@ const OrderManagementScreen = () => {
         .eq('id', user.id)
         .single();
 
-      if (!['admin', 'shop_owner'].includes(profile?.role)) {
-        Alert.alert('Error', 'Unauthorized to view orders');
+      if (!['admin'].includes(profile?.role)) {
+        Alert.alert('Error', 'Unauthorized to view orders. Admin access required.');
         return;
       }
 

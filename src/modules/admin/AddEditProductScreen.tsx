@@ -7,13 +7,16 @@ import {
   TouchableOpacity,
   Alert,
   Image,
+  ActivityIndicator,
 } from 'react-native';
-import { TextInput, Button, Card, Title, Chip, FAB } from 'react-native-paper';
+import { TextInput, Button, Card, Title, Chip, FAB, Portal, Modal } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { theme } from '../../theme/theme';
 import { hp, wp, rf } from '../../utils/responsiveUtils';
 import Loading from '../../components/Loading';
+import { StorageService } from '../../services/storageService';
+import { ProductService } from '../../services/productService';
 
 interface Product {
   id?: string;
@@ -33,6 +36,10 @@ const AddEditProductScreen = () => {
   const { product } = (route.params as { product?: any }) || {};
 
   const [loading, setLoading] = useState(false);
+  const [uploadingImages, setUploadingImages] = useState(false);
+  const [imagePickerVisible, setImagePickerVisible] = useState(false);
+  const [currentImageType, setCurrentImageType] = useState<'product' | 'virtual'>('product');
+
   const [productData, setProductData] = useState<Product>({
     name: '',
     description: '',
@@ -65,49 +72,136 @@ const AddEditProductScreen = () => {
 
     setLoading(true);
     try {
-      // TODO: Implement actual product save API call
-      // For now, just show success message
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      let result;
 
-      Alert.alert('Success', `Product ${product ? 'updated' : 'created'} successfully`);
-      navigation.goBack();
-    } catch (error) {
-      Alert.alert('Error', 'Failed to save product');
+      if (product) {
+        // Update existing product
+        result = await ProductService.updateProduct(product.id, productData);
+      } else {
+        // Create new product
+        result = await ProductService.createProduct(productData);
+      }
+
+      if (result.success) {
+        Alert.alert('Success', `Product ${product ? 'updated' : 'created'} successfully`);
+        navigation.goBack();
+      } else {
+        Alert.alert('Error', result.error || 'Failed to save product');
+      }
+    } catch (error: any) {
+      console.error('Save product error:', error);
+      Alert.alert('Error', error.message || 'Failed to save product');
     } finally {
       setLoading(false);
     }
   };
 
-  const addImage = () => {
-    // Mock image upload - replace with actual image picker
-    const mockImageUrl = `https://via.placeholder.com/300x300?text=Product+Image+${productData.images.length + 1}`;
-    setProductData(prev => ({
-      ...prev,
-      images: [...prev.images, mockImageUrl],
-    }));
+  const showImagePicker = (imageType: 'product' | 'virtual') => {
+    setCurrentImageType(imageType);
+    setImagePickerVisible(true);
   };
 
-  const removeImage = (index: number) => {
-    setProductData(prev => ({
-      ...prev,
-      images: prev.images.filter((_, i) => i !== index),
-    }));
+  const handleImagePickerSelection = async (source: 'camera' | 'library') => {
+    try {
+      setImagePickerVisible(false);
+      setUploadingImages(true);
+
+      let result;
+      const options = StorageService.getImagePickerOptions(currentImageType === 'virtual');
+
+      if (source === 'camera') {
+        result = await StorageService.pickFromCamera(options);
+      } else {
+        result = await StorageService.pickFromLibrary(options);
+      }
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const selectedImage = result.assets[0];
+
+        // Upload the image
+        const uploadResult = await StorageService.uploadImage(
+          selectedImage.uri,
+          `image_${Date.now()}.jpg`,
+          currentImageType === 'virtual' ? 'virtual-tryon' : 'products'
+        );
+
+        if (uploadResult.success && uploadResult.url) {
+          if (currentImageType === 'virtual') {
+            setProductData(prev => ({
+              ...prev,
+              virtual_tryon_images: [...prev.virtual_tryon_images, uploadResult.url!],
+            }));
+          } else {
+            setProductData(prev => ({
+              ...prev,
+              images: [...prev.images, uploadResult.url!],
+            }));
+          }
+        } else {
+          Alert.alert('Upload Failed', uploadResult.error || 'Failed to upload image');
+        }
+      }
+    } catch (error: any) {
+      console.error('Image picker error:', error);
+      Alert.alert('Error', error.message || 'Failed to pick image');
+    } finally {
+      setUploadingImages(false);
+    }
   };
 
-  const addVirtualTryOnImage = () => {
-    // Mock PNG image upload - replace with actual image picker that filters for PNG
-    const mockImageUrl = `https://via.placeholder.com/300x300/FF0000/FFFFFF.png?text=Virtual+Try-On+PNG+${productData.virtual_tryon_images.length + 1}`;
-    setProductData(prev => ({
-      ...prev,
-      virtual_tryon_images: [...prev.virtual_tryon_images, mockImageUrl],
-    }));
-  };
+  const removeImage = async (index: number, isVirtualTryOn = false) => {
+    const images = isVirtualTryOn ? productData.virtual_tryon_images : productData.images;
+    const imageUrl = images[index];
 
-  const removeVirtualTryOnImage = (index: number) => {
-    setProductData(prev => ({
-      ...prev,
-      virtual_tryon_images: prev.virtual_tryon_images.filter((_, i) => i !== index),
-    }));
+    // If it's a local URI (not uploaded yet), just remove it
+    if (!imageUrl.startsWith('http')) {
+      if (isVirtualTryOn) {
+        setProductData(prev => ({
+          ...prev,
+          virtual_tryon_images: prev.virtual_tryon_images.filter((_, i) => i !== index),
+        }));
+      } else {
+        setProductData(prev => ({
+          ...prev,
+          images: prev.images.filter((_, i) => i !== index),
+        }));
+      }
+      return;
+    }
+
+    // For uploaded images, ask for confirmation and delete from storage
+    Alert.alert(
+      'Remove Image',
+      'Are you sure you want to remove this image? This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              // Delete from storage
+              await StorageService.deleteImage(imageUrl);
+
+              // Remove from state
+              if (isVirtualTryOn) {
+                setProductData(prev => ({
+                  ...prev,
+                  virtual_tryon_images: prev.virtual_tryon_images.filter((_, i) => i !== index),
+                }));
+              } else {
+                setProductData(prev => ({
+                  ...prev,
+                  images: prev.images.filter((_, i) => i !== index),
+                }));
+              }
+            } catch (error) {
+              Alert.alert('Error', 'Failed to remove image');
+            }
+          }
+        }
+      ]
+    );
   };
 
 
@@ -126,6 +220,48 @@ const AddEditProductScreen = () => {
 
   return (
     <View style={styles.container}>
+      {/* Image Picker Modal */}
+      <Portal>
+        <Modal
+          visible={imagePickerVisible}
+          onDismiss={() => setImagePickerVisible(false)}
+          contentContainerStyle={styles.modalContainer}
+        >
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>
+              Add {currentImageType === 'virtual' ? 'Virtual Try-On' : 'Product'} Image
+            </Text>
+            <Text style={styles.modalSubtitle}>
+              Choose how to add the image
+            </Text>
+
+            <TouchableOpacity
+              style={styles.modalOption}
+              onPress={() => handleImagePickerSelection('camera')}
+            >
+              <Ionicons name="camera" size={24} color={theme.colors.primary} />
+              <Text style={styles.modalOptionText}>Take Photo</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.modalOption}
+              onPress={() => handleImagePickerSelection('library')}
+            >
+              <Ionicons name="images" size={24} color={theme.colors.primary} />
+              <Text style={styles.modalOptionText}>Choose from Gallery</Text>
+            </TouchableOpacity>
+
+            <Button
+              mode="outlined"
+              onPress={() => setImagePickerVisible(false)}
+              style={styles.modalCancelButton}
+            >
+              Cancel
+            </Button>
+          </View>
+        </Modal>
+      </Portal>
+
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         {/* Header */}
         <View style={styles.header}>
@@ -189,11 +325,12 @@ const AddEditProductScreen = () => {
             <Title style={styles.sectionTitle}>Product Images</Title>
             <Button
               mode="outlined"
-              onPress={addImage}
+              onPress={() => showImagePicker('product')}
               style={styles.addButton}
               icon="camera"
+              disabled={uploadingImages}
             >
-              Add Product Image
+              {uploadingImages ? 'Uploading...' : 'Add Product Image'}
             </Button>
 
             <View style={styles.imagesContainer}>
@@ -221,11 +358,12 @@ const AddEditProductScreen = () => {
             </Text>
             <Button
               mode="outlined"
-              onPress={addVirtualTryOnImage}
+              onPress={() => showImagePicker('virtual')}
               style={styles.addButton}
               icon="image-plus"
+              disabled={uploadingImages}
             >
-              Add Virtual Try-On Image
+              {uploadingImages ? 'Uploading...' : 'Add Virtual Try-On Image'}
             </Button>
 
             <View style={styles.imagesContainer}>
@@ -234,7 +372,7 @@ const AddEditProductScreen = () => {
                   <Image source={{ uri: image }} style={styles.image} />
                   <TouchableOpacity
                     style={styles.removeImageButton}
-                    onPress={() => removeVirtualTryOnImage(index)}
+                    onPress={() => removeImage(index, true)}
                   >
                     <Ionicons name="close-circle" size={24} color={theme.colors.danger} />
                   </TouchableOpacity>
@@ -407,6 +545,48 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
     marginBottom: hp(2),
     lineHeight: rf(20),
+  },
+  modalContainer: {
+    margin: wp(5),
+    backgroundColor: theme.colors.surface,
+    borderRadius: wp(3),
+    padding: wp(5),
+  },
+  modalContent: {
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: rf(20),
+    fontWeight: 'bold',
+    color: theme.colors.textPrimary,
+    marginBottom: hp(1),
+  },
+  modalSubtitle: {
+    fontSize: rf(16),
+    color: theme.colors.textSecondary,
+    marginBottom: hp(3),
+    textAlign: 'center',
+  },
+  modalOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: wp(4),
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: wp(2),
+    marginBottom: hp(2),
+    width: '100%',
+    backgroundColor: theme.colors.background,
+  },
+  modalOptionText: {
+    fontSize: rf(16),
+    color: theme.colors.textPrimary,
+    marginLeft: wp(3),
+    fontWeight: '500',
+  },
+  modalCancelButton: {
+    marginTop: hp(2),
+    width: '100%',
   },
 });
 

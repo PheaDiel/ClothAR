@@ -78,16 +78,25 @@ export class SecurityService {
       const windowStart = new Date()
       windowStart.setMinutes(windowStart.getMinutes() - securityConfig.rateLimit.windowMinutes)
 
-      // Get recent failed attempts
-      const { data: attempts, error } = await supabase
-        .from('login_attempts')
-        .select('*')
-        .eq('email', email)
-        .gte('attempted_at', windowStart.toISOString())
-        .order('attempted_at', { ascending: false })
+      // Get recent failed attempts - simplified approach to avoid RLS issues
+      let attempts: any[] = []
+      try {
+        const { data, error } = await supabase
+          .from('login_attempts')
+          .select('*')
+          .eq('email', email)
+          .gte('attempted_at', windowStart.toISOString())
+          .order('attempted_at', { ascending: false })
 
-      if (error) {
-        console.error('Rate limit check error:', error)
+        if (error) {
+          console.error('Rate limit check error:', error)
+          // Allow login on RLS error to avoid blocking legitimate users
+          return { allowed: true, remainingAttempts: securityConfig.rateLimit.maxAttempts }
+        }
+        attempts = data || []
+      } catch (error) {
+        console.error('Rate limit check failed:', error)
+        // Allow login on error to avoid blocking legitimate users
         return { allowed: true, remainingAttempts: securityConfig.rateLimit.maxAttempts }
       }
 
@@ -138,9 +147,11 @@ export class SecurityService {
 
       if (error) {
         console.error('Failed to record login attempt:', error)
+        // Don't throw - logging failures shouldn't break login flow
       }
     } catch (error) {
       console.error('Login attempt recording failed:', error)
+      // Don't throw - logging failures shouldn't break login flow
     }
   }
 
@@ -169,9 +180,11 @@ export class SecurityService {
 
       if (error) {
         console.error('Failed to log security event:', error)
+        // Don't throw - logging failures shouldn't break the main flow
       }
     } catch (error) {
       console.error('Security event logging failed:', error)
+      // Don't throw - logging failures shouldn't break the main flow
     }
   }
 

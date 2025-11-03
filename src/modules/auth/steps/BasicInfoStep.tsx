@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
 import { View, StyleSheet, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
-import { TextInput, Button, HelperText, Text, Menu } from 'react-native-paper';
+import { TextInput, Button, Text } from 'react-native-paper';
 import PasswordInput from '../../../components/PasswordInput';
 import { RegistrationData } from '../../../types';
 import { wp, rf } from '../../../utils/responsiveUtils';
-import { useRegistrationForm } from '../../../hooks/useFormValidation';
 import { useToast } from '../../../context/ToastContext';
 
 interface BasicInfoStepProps {
@@ -16,16 +15,14 @@ interface BasicInfoStepProps {
 export default function BasicInfoStep({ data, onUpdate, onNext }: BasicInfoStepProps) {
   const { showError } = useToast();
 
-  // Initialize form with existing data
-  const form = useRegistrationForm();
-
-  // Sync form data with parent component
-  React.useEffect(() => {
-    if (data.name) form.setFieldValue('name', data.name);
-    if (data.email) form.setFieldValue('email', data.email);
-    if (data.phone) form.setFieldValue('phone', data.phone);
-    if (data.password) form.setFieldValue('password', data.password);
-  }, [data]);
+  // Local state for form inputs to prevent interference
+  const [formData, setFormData] = useState({
+    name: data.name || '',
+    email: data.email || '',
+    phone: data.phone || '',
+    password: data.password || '',
+    confirmPassword: '',
+  });
 
   // Set default role to customer on component mount
   React.useEffect(() => {
@@ -35,30 +32,53 @@ export default function BasicInfoStep({ data, onUpdate, onNext }: BasicInfoStepP
   }, []);
 
   const handleFieldChange = (fieldName: string, value: string) => {
-    form.setFieldValue(fieldName, value);
-    // Update parent component data
-    onUpdate({ [fieldName]: form.getFieldValue(fieldName) });
+    setFormData(prev => ({ ...prev, [fieldName]: value }));
+    // Update parent component data immediately with the new value
+    onUpdate({ [fieldName]: value });
   };
 
   const handleConfirmPasswordChange = (value: string) => {
-    form.setFieldValue('confirmPassword', value);
+    setFormData(prev => ({ ...prev, confirmPassword: value }));
+  };
+
+  const validateForm = () => {
+    const errors: string[] = [];
+
+    if (!formData.name.trim()) errors.push('Name is required');
+    if (!formData.email.trim()) errors.push('Email is required');
+    if (!formData.phone.trim()) errors.push('Phone is required');
+    if (!formData.password) errors.push('Password is required');
+    if (formData.password !== formData.confirmPassword) errors.push('Passwords do not match');
+
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (formData.email && !emailRegex.test(formData.email)) {
+      errors.push('Please enter a valid email address');
+    }
+
+    // Basic phone validation (Philippine numbers)
+    const phoneRegex = /^(\+63|0)[0-9]{10}$/;
+    if (formData.phone && !phoneRegex.test(formData.phone.replace(/\s/g, ''))) {
+      errors.push('Please enter a valid Philippine phone number');
+    }
+
+    // Password strength
+    if (formData.password && formData.password.length < 8) {
+      errors.push('Password must be at least 8 characters long');
+    }
+
+    return errors;
   };
 
   const handleNext = () => {
-    // Validate password confirmation manually
-    const password = form.getFieldValue('password');
-    const confirmPassword = form.getFieldValue('confirmPassword');
+    const errors = validateForm();
 
-    if (password !== confirmPassword) {
-      showError('Passwords do not match');
+    if (errors.length > 0) {
+      showError(errors[0]); // Show first error
       return;
     }
 
-    if (form.validateForm()) {
-      onNext();
-    } else {
-      showError('Please correct the errors in the form');
-    }
+    onNext();
   };
 
   return (
@@ -78,61 +98,41 @@ export default function BasicInfoStep({ data, onUpdate, onNext }: BasicInfoStepP
 
       <TextInput
         label="Full Name"
-        value={form.fields.name.value}
+        value={formData.name}
         onChangeText={(value) => handleFieldChange('name', value)}
         style={styles.input}
-        error={!!form.fields.name.error}
       />
-      <HelperText type="error" visible={!!form.fields.name.error}>
-        {form.fields.name.error}
-      </HelperText>
 
       <TextInput
         label="Email"
-        value={form.fields.email.value}
+        value={formData.email}
         onChangeText={(value) => handleFieldChange('email', value)}
         keyboardType="email-address"
         autoCapitalize="none"
         style={styles.input}
-        error={!!form.fields.email.error}
       />
-      <HelperText type="error" visible={!!form.fields.email.error}>
-        {form.fields.email.error}
-      </HelperText>
 
       <PasswordInput
         label="Password"
-        value={form.fields.password.value}
+        value={formData.password}
         onChangeText={(value) => handleFieldChange('password', value)}
         style={styles.input}
-        error={!!form.fields.password.error}
       />
-      <HelperText type="error" visible={!!form.fields.password.error}>
-        {form.fields.password.error}
-      </HelperText>
 
       <PasswordInput
         label="Confirm Password"
-        value={form.fields.confirmPassword.value}
+        value={formData.confirmPassword}
         onChangeText={handleConfirmPasswordChange}
         style={styles.input}
-        error={!!form.fields.confirmPassword.error}
       />
-      <HelperText type="error" visible={!!form.fields.confirmPassword.error}>
-        {form.fields.confirmPassword.error}
-      </HelperText>
 
       <TextInput
         label="Phone Number"
-        value={form.fields.phone.value}
+        value={formData.phone}
         onChangeText={(value) => handleFieldChange('phone', value)}
         keyboardType="phone-pad"
         style={styles.input}
-        error={!!form.fields.phone.error}
       />
-      <HelperText type="error" visible={!!form.fields.phone.error}>
-        {form.fields.phone.error}
-      </HelperText>
 
 
            <Button
@@ -140,7 +140,7 @@ export default function BasicInfoStep({ data, onUpdate, onNext }: BasicInfoStepP
              onPress={handleNext}
              style={styles.nextButton}
              contentStyle={styles.nextButtonContent}
-             disabled={!form.isValid}
+             disabled={!formData.name.trim() || !formData.email.trim() || !formData.phone.trim() || !formData.password || formData.password !== formData.confirmPassword}
            >
              Next
            </Button>

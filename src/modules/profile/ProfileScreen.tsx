@@ -129,7 +129,7 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
   const userEmail = isGuest ? "guest@local" : (user?.email || "user@example.com");
   const userAvatar = isGuest
     ? "https://cdn.vectorstock.com/i/1000v/28/66/gray-profile-silhouette-avatar-vector-21542866.jpg"
-    : (user?.avatar_url || (user?.email ? `https://i.pravatar.cc/150?img=3` : "https://i.pravatar.cc/150?img=1"));
+    : (user?.avatar_url || (user?.email ? `https://i.pravatar.cc/150?u=${user.email}` : "https://i.pravatar.cc/150?img=1"));
 
   const needsVerification = user && !isGuest && user.verification_status !== 'verified';
 
@@ -232,18 +232,6 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
             <Text style={styles.actionText}>Add New Measurements</Text>
           </TouchableOpacity>
 
-          {!isGuest && (
-            <TouchableOpacity
-              style={styles.actionItem}
-              onPress={handleRequestAccountDeletion}
-              accessible={true}
-              accessibilityLabel="Account Settings"
-              accessibilityHint="Manage account settings and deletion"
-            >
-              <Ionicons name="settings-outline" size={24} color="#2E86AB" />
-              <Text style={styles.actionText}>Account Settings</Text>
-            </TouchableOpacity>
-          )}
         </View>
 
         {/* Saved Measurements */}

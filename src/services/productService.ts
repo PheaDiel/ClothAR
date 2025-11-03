@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { StorageService } from './storageService';
 
 export interface Product {
   id: string;
@@ -495,6 +496,258 @@ export class ProductService {
       return { success: true, products };
     } catch (error: any) {
       console.error('Get low stock products error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Create new product with image uploads
+   */
+  static async createProduct(productData: {
+    name: string;
+    description: string;
+    category: string;
+    subcategory?: string;
+    brand?: string;
+    base_price: number;
+    images: string[]; // Local URIs to upload
+    virtual_tryon_images: string[]; // Local URIs to upload
+    fabric_ids: string[];
+    is_active: boolean;
+  }): Promise<{ success: boolean; product?: Product; error?: string }> {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        return { success: false, error: 'User not authenticated' };
+      }
+
+      // Check admin permissions
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+
+      if (!['admin', 'shop_owner'].includes(profile?.role)) {
+        return { success: false, error: 'Unauthorized to create products' };
+      }
+
+      // Upload product images
+      const productImageUrls: string[] = [];
+      if (productData.images.length > 0) {
+        const uploadResults = await StorageService.uploadMultipleImages(
+          productData.images,
+          'products',
+          (completed, total) => console.log(`Uploaded ${completed}/${total} product images`)
+        );
+
+        for (const result of uploadResults) {
+          if (result.success && result.url) {
+            productImageUrls.push(result.url);
+          } else {
+            console.error('Failed to upload product image:', result.error);
+          }
+        }
+      }
+
+      // Upload virtual try-on images
+      const virtualTryOnUrls: string[] = [];
+      if (productData.virtual_tryon_images.length > 0) {
+        const uploadResults = await StorageService.uploadMultipleImages(
+          productData.virtual_tryon_images,
+          'virtual-tryon',
+          (completed, total) => console.log(`Uploaded ${completed}/${total} virtual try-on images`)
+        );
+
+        for (const result of uploadResults) {
+          if (result.success && result.url) {
+            virtualTryOnUrls.push(result.url);
+          } else {
+            console.error('Failed to upload virtual try-on image:', result.error);
+          }
+        }
+      }
+
+      // Create product in database
+      const { data: product, error } = await supabase
+        .from('products')
+        .insert({
+          name: productData.name,
+          description: productData.description,
+          category: productData.category,
+          subcategory: productData.subcategory,
+          brand: productData.brand,
+          base_price: productData.base_price,
+          images: productImageUrls,
+          virtual_tryon_images: virtualTryOnUrls,
+          tags: [], // Can be enhanced later
+          is_active: productData.is_active,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      return { success: true, product };
+    } catch (error: any) {
+      console.error('Create product error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Update product with image uploads
+   */
+  static async updateProduct(
+    productId: string,
+    productData: {
+      name: string;
+      description: string;
+      category: string;
+      subcategory?: string;
+      brand?: string;
+      base_price: number;
+      images: string[]; // Mix of URLs and local URIs
+      virtual_tryon_images: string[]; // Mix of URLs and local URIs
+      fabric_ids: string[];
+      is_active: boolean;
+    }
+  ): Promise<{ success: boolean; product?: Product; error?: string }> {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        return { success: false, error: 'User not authenticated' };
+      }
+
+      // Check admin permissions
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+
+      if (!['admin', 'shop_owner'].includes(profile?.role)) {
+        return { success: false, error: 'Unauthorized to update products' };
+      }
+
+      // Separate existing URLs from new local URIs
+      const existingProductImages = productData.images.filter(url => url.startsWith('http'));
+      const newProductImages = productData.images.filter(url => !url.startsWith('http'));
+
+      const existingVirtualTryOnImages = productData.virtual_tryon_images.filter(url => url.startsWith('http'));
+      const newVirtualTryOnImages = productData.virtual_tryon_images.filter(url => !url.startsWith('http'));
+
+      // Upload new product images
+      const newProductImageUrls: string[] = [];
+      if (newProductImages.length > 0) {
+        const uploadResults = await StorageService.uploadMultipleImages(
+          newProductImages,
+          'products',
+          (completed, total) => console.log(`Uploaded ${completed}/${total} new product images`)
+        );
+
+        for (const result of uploadResults) {
+          if (result.success && result.url) {
+            newProductImageUrls.push(result.url);
+          }
+        }
+      }
+
+      // Upload new virtual try-on images
+      const newVirtualTryOnUrls: string[] = [];
+      if (newVirtualTryOnImages.length > 0) {
+        const uploadResults = await StorageService.uploadMultipleImages(
+          newVirtualTryOnImages,
+          'virtual-tryon',
+          (completed, total) => console.log(`Uploaded ${completed}/${total} new virtual try-on images`)
+        );
+
+        for (const result of uploadResults) {
+          if (result.success && result.url) {
+            newVirtualTryOnUrls.push(result.url);
+          }
+        }
+      }
+
+      // Combine existing and new images
+      const allProductImages = [...existingProductImages, ...newProductImageUrls];
+      const allVirtualTryOnImages = [...existingVirtualTryOnImages, ...newVirtualTryOnUrls];
+
+      // Update product in database
+      const { data: product, error } = await supabase
+        .from('products')
+        .update({
+          name: productData.name,
+          description: productData.description,
+          category: productData.category,
+          subcategory: productData.subcategory,
+          brand: productData.brand,
+          base_price: productData.base_price,
+          images: allProductImages,
+          virtual_tryon_images: allVirtualTryOnImages,
+          is_active: productData.is_active,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', productId)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      return { success: true, product };
+    } catch (error: any) {
+      console.error('Update product error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Delete product and its images
+   */
+  static async deleteProduct(productId: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        return { success: false, error: 'User not authenticated' };
+      }
+
+      // Check admin permissions
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+
+      if (!['admin', 'shop_owner'].includes(profile?.role)) {
+        return { success: false, error: 'Unauthorized to delete products' };
+      }
+
+      // Get product to delete associated images
+      const { data: product } = await supabase
+        .from('products')
+        .select('images, virtual_tryon_images')
+        .eq('id', productId)
+        .single();
+
+      // Delete images from storage
+      if (product) {
+        const allImages = [...(product.images || []), ...(product.virtual_tryon_images || [])];
+        for (const imageUrl of allImages) {
+          await StorageService.deleteImage(imageUrl);
+        }
+      }
+
+      // Delete product from database
+      const { error } = await supabase
+        .from('products')
+        .delete()
+        .eq('id', productId);
+
+      if (error) throw error;
+
+      return { success: true };
+    } catch (error: any) {
+      console.error('Delete product error:', error);
       return { success: false, error: error.message };
     }
   }

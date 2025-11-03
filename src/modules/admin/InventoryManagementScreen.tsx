@@ -60,7 +60,7 @@ const InventoryManagementScreen = () => {
          .single();
 
        if (!['admin', 'shop_owner'].includes(profile?.role)) {
-         Alert.alert('Error', 'Unauthorized to view inventory');
+         Alert.alert('Error', 'Unauthorized to view inventory. Admin access required.');
          return;
        }
 

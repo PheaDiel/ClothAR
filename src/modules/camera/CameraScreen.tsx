@@ -34,6 +34,7 @@ export default function CameraScreen() {
   const [bodyPose, setBodyPose] = useState<any>(null);
   const [clothingOverlay, setClothingOverlay] = useState<ClothingOverlay | null>(null);
   const [selectedClothing, setSelectedClothing] = useState<any>(null);
+  const [selectedClothingDimensions, setSelectedClothingDimensions] = useState<{ width: number; height: number } | null>(null);
   const [clothingLayers, setClothingLayers] = useState<ClothingLayer[]>([]);
   const [multiLayerMode, setMultiLayerMode] = useState(false);
   const [clothingItems, setClothingItems] = useState<any[]>([]);
@@ -41,7 +42,7 @@ export default function CameraScreen() {
     showGrid: false,
     showLandmarks: false,
     clothingOpacity: 0.8,
-    enableRealTimePose: true,
+    enableRealTimePose: false,
   });
   const [showTutorial, setShowTutorial] = useState(false);
   const [isLoadingPose, setIsLoadingPose] = useState(false);
@@ -263,7 +264,7 @@ export default function CameraScreen() {
       if (!isProcessingFrame && cameraRef.current && isARMode && arSettings.enableRealTimePose) {
         await processCameraFrame();
       }
-    }, 150); // Process at ~6-7 FPS for optimal performance and accuracy balance
+    }, 500); // Slower interval for smoother demo performance
   };
 
   // Function to process camera frame for pose detection
@@ -294,7 +295,21 @@ export default function CameraScreen() {
 
       // Update overlay if clothing is selected (single layer mode)
       if (selectedClothing && !multiLayerMode) {
-        const imageDimensions = { width: 200, height: 300 }; // Placeholder dimensions
+        const targetUri = selectedClothing.virtual_tryon_images?.[0] || selectedClothing.images?.[0] || selectedClothing.imageUri;
+        let dims = selectedClothingDimensions;
+        if (!dims && targetUri) {
+          try {
+            dims = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+              Image.getSize(
+                targetUri,
+                (w, h) => resolve({ width: w, height: h }),
+                (e) => resolve({ width: 200, height: 300 })
+              );
+            });
+            setSelectedClothingDimensions(dims);
+          } catch {}
+        }
+        const imageDimensions = dims || { width: 200, height: 300 };
         const overlay = await renderClothingOverlay(selectedClothing, poseResult, imageDimensions, userMeasurements);
         setClothingOverlay(overlay);
       }
@@ -372,7 +387,21 @@ export default function CameraScreen() {
           setBodyPose(pose);
 
           // Calculate overlay position based on body pose with measurement integration
-          const imageDimensions = { width: 200, height: 300 }; // Placeholder dimensions
+          const targetUri = item.virtual_tryon_images?.[0] || item.images?.[0] || item.imageUri;
+          let dims = null as { width: number; height: number } | null;
+          if (targetUri) {
+            try {
+              dims = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+                Image.getSize(
+                  targetUri,
+                  (w, h) => resolve({ width: w, height: h }),
+                  (e) => resolve({ width: 200, height: 300 })
+                );
+              });
+              setSelectedClothingDimensions(dims);
+            } catch {}
+          }
+          const imageDimensions = dims || { width: 200, height: 300 };
           const overlay = await renderClothingOverlay(item, pose, imageDimensions, userMeasurements);
           setClothingOverlay(overlay);
         }

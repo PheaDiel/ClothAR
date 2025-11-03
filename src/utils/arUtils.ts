@@ -330,8 +330,8 @@ export async function detectBodyPose(imageUri?: string): Promise<{ landmarks: Bo
     console.log('🔍 DEBUG: Platform:', Platform.OS);
     console.log('🔍 DEBUG: detector ready:', !!detector, 'isTfReady:', isTfReady);
 
-    // Try ML-based pose detection first
-    if (detector && isTfReady && imageUri) {
+    // Try ML-based pose detection first (only on web where DOM APIs exist)
+    if (detector && isTfReady && imageUri && Platform.OS === 'web') {
       try {
         console.log('🔍 DEBUG: Attempting ML pose detection with camera frame...');
 
@@ -345,7 +345,7 @@ export async function detectBodyPose(imageUri?: string): Promise<{ landmarks: Bo
 
         // CRITICAL: React Native doesn't have DOM APIs like Image, canvas, document
         // This is the likely source of the render error
-        console.log('🔍 DEBUG: Attempting to create Image element (this will fail in React Native)...');
+        console.log('🔍 DEBUG: Attempting to create Image element (web only path)...');
         const img = new Image();
         img.src = asset.localUri || imageUri;
 

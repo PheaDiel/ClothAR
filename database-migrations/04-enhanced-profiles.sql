@@ -146,48 +146,60 @@ COMMENT ON TABLE public.user_favorites IS 'User favorite clothing items for quic
 -- Update Trigger for Enhanced Profiles
 -- ============================================
 
--- Update the handle_new_user function to include new fields
+-- Update the handle_new_user function to include address fields
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
-  INSERT INTO public.profiles (
-    id,
-    name,
-    phone,
-    role,
-    role_status,
-    email_verified,
-    phone_verified,
-    password_changed_at,
-    verification_status,
-    full_name,
-    date_of_birth,
-    gender,
-    marketing_email_consent
-  ) VALUES (
-    NEW.id,
-    COALESCE(NEW.raw_user_meta_data->>'name', ''),
-    COALESCE(NEW.raw_user_meta_data->>'phone', NEW.phone),
-    COALESCE(NEW.raw_user_meta_data->>'role', 'customer'),
-    CASE
-      WHEN NEW.raw_user_meta_data->>'role' = 'customer' THEN 'approved'
-      ELSE 'pending'
-    END,
-    COALESCE(NEW.email_confirmed_at IS NOT NULL, FALSE),
-    FALSE,
-    NOW(),
-    CASE
-      WHEN NEW.email_confirmed_at IS NOT NULL THEN 'verified'
-      ELSE 'pending'
-    END,
-    NEW.raw_user_meta_data->>'full_name',
-    CASE
-      WHEN NEW.raw_user_meta_data->>'date_of_birth' != '' THEN (NEW.raw_user_meta_data->>'date_of_birth')::DATE
-      ELSE NULL
-    END,
-    NEW.raw_user_meta_data->>'gender',
-    COALESCE((NEW.raw_user_meta_data->>'marketing_email_consent')::BOOLEAN, FALSE)
-  );
+   INSERT INTO public.profiles (
+     id,
+     name,
+     phone,
+     role,
+     role_status,
+     email_verified,
+     phone_verified,
+     password_changed_at,
+     verification_status,
+     full_name,
+     date_of_birth,
+     gender,
+     marketing_email_consent,
+     province_code,
+     province_name,
+     city_code,
+     city_name,
+     barangay,
+     profile_complete
+   ) VALUES (
+     NEW.id,
+     COALESCE(NEW.raw_user_meta_data->>'name', ''),
+     COALESCE(NEW.raw_user_meta_data->>'phone', NEW.phone),
+     COALESCE(NEW.raw_user_meta_data->>'role', 'customer'),
+     CASE
+       WHEN NEW.raw_user_meta_data->>'role' = 'customer' THEN 'approved'
+       ELSE 'pending'
+     END,
+     COALESCE(NEW.email_confirmed_at IS NOT NULL, FALSE),
+     FALSE,
+     NOW(),
+     CASE
+       WHEN NEW.email_confirmed_at IS NOT NULL THEN 'verified'
+       ELSE 'pending'
+     END,
+     NEW.raw_user_meta_data->>'full_name',
+     CASE
+       WHEN NEW.raw_user_meta_data->>'date_of_birth' != '' THEN (NEW.raw_user_meta_data->>'date_of_birth')::DATE
+       ELSE NULL
+     END,
+     NEW.raw_user_meta_data->>'gender',
+     COALESCE((NEW.raw_user_meta_data->>'marketing_email_consent')::BOOLEAN, FALSE),
+     NEW.raw_user_meta_data->>'province_code',
+     NEW.raw_user_meta_data->>'province_name',
+     NEW.raw_user_meta_data->>'city_code',
+     NEW.raw_user_meta_data->>'city_name',
+     NEW.raw_user_meta_data->>'barangay',
+     COALESCE((NEW.raw_user_meta_data->>'profile_complete')::BOOLEAN, FALSE)
+   );
 
   -- Log the registration
   PERFORM public.log_audit_event(
