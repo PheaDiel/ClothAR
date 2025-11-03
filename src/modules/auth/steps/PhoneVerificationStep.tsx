@@ -1,9 +1,11 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import { View, StyleSheet, Alert } from 'react-native';
-import { TextInput, Button, HelperText, Text } from 'react-native-paper';
+import { TextInput, Button, HelperText, Text, ActivityIndicator } from 'react-native-paper';
 import { parsePhoneNumber } from 'libphonenumber-js';
 import { RegistrationData } from '../../../types';
 import { wp, rf } from '../../../utils/responsiveUtils';
+import { supabase } from '../../../services/supabase';
+import { EmailService } from '../../../services/emailService';
 
 interface PhoneVerificationStepProps {
   data: RegistrationData;
@@ -13,110 +15,155 @@ interface PhoneVerificationStepProps {
 }
 
 export default function PhoneVerificationStep({ data, onUpdate, onNext, onPrev }: PhoneVerificationStepProps) {
-  const [otp, setOtp] = useState('');
-  const [otpSent, setOtpSent] = useState(false);
-  const [generatedOtp, setGeneratedOtp] = useState('');
-  const [phoneError, setPhoneError] = useState('');
-  const [otpError, setOtpError] = useState('');
+  const [email, setEmail] = useState(data.email || '');
+  const [emailSent, setEmailSent] = useState(false);
+  const [verificationToken, setVerificationToken] = useState('');
+  const [emailError, setEmailError] = useState('');
+  const [tokenError, setTokenError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const validatePhilippinePhone = (phone: string) => {
-    // Remove spaces and dashes for validation
-    const cleanPhone = phone.replace(/[\s-]/g, '');
-
-    // Check if it starts with +63 or 09
-    if (!cleanPhone.startsWith('+63') && !cleanPhone.startsWith('09')) {
-      return false;
-    }
-
-    try {
-      const phoneNumber = parsePhoneNumber(cleanPhone, 'PH');
-      return phoneNumber.isValid();
-    } catch {
-      return false;
-    }
+  const validateEmail = (email: string) => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
   };
 
-  const formatPhoneNumber = (text: string) => {
-    // Basic formatting for Philippine numbers
-    let cleaned = text.replace(/\D/g, '');
-    if (cleaned.startsWith('63')) {
-      cleaned = '+' + cleaned;
-    } else if (cleaned.startsWith('0')) {
-      cleaned = '+63' + cleaned.substring(1);
-    } else if (!cleaned.startsWith('+')) {
-      cleaned = '+63' + cleaned;
-    }
-    return cleaned;
-  };
-
-  const sendOtp = () => {
-    if (!data.phone || !validatePhilippinePhone(data.phone)) {
-      setPhoneError('Please enter a valid Philippine phone number (+63 or 09)');
+  const sendVerificationEmail = async () => {
+    if (!email || !validateEmail(email)) {
+      setEmailError('Please enter a valid email address');
       return;
     }
 
-    setPhoneError('');
+    setEmailError('');
+    setLoading(true);
 
-    // Mock OTP generation
-    const mockOtp = Math.floor(100000 + Math.random() * 900000).toString();
-    setGeneratedOtp(mockOtp);
-    setOtpSent(true);
-    Alert.alert('OTP Sent', `Your OTP is: ${mockOtp}`); // Remove in production
-  };
+    try {
+      // Generate verification token
+      const token = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 
-  const verifyOtp = () => {
-    if (otp === generatedOtp) {
-      setOtpError('');
-      onNext();
-    } else {
-      setOtpError('Invalid OTP. Please try again.');
+      // Store token in database
+      const { error: tokenError } = await supabase
+        .from('email_verification_tokens')
+        .insert({
+          user_id: data.userId, // Assuming userId is available from registration
+          email: email,
+          token: token,
+          expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() // 24 hours
+        });
+
+      if (tokenError) {
+        console.error('Token storage error:', tokenError);
+        Alert.alert('Error', 'Failed to send verification email. Please try again.');
+        return;
+      }
+
+      // Send verification email
+      const emailService = EmailService.getInstance();
+      const emailSent = await emailService.sendVerificationEmail({
+        email: email,
+        verificationToken: token,
+        userId: data.userId || ''
+      });
+
+      if (emailSent) {
+        setVerificationToken(token);
+        setEmailSent(true);
+        onUpdate({ email });
+        Alert.alert('Verification Email Sent', `A verification link has been sent to ${email}`);
+      } else {
+        Alert.alert('Error', 'Failed to send verification email. Please try again.');
+      }
+    } catch (error) {
+      console.error('Email verification error:', error);
+      Alert.alert('Error', 'An unexpected error occurred. Please try again.');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handlePhoneChange = (text: string) => {
-    const formatted = formatPhoneNumber(text);
-    onUpdate({ phone: formatted });
-    setPhoneError('');
+  const verifyEmailToken = async () => {
+    if (!verificationToken.trim()) {
+      setTokenError('Please enter the verification token from your email');
+      return;
+    }
+
+    setTokenError('');
+    setLoading(true);
+
+    try {
+      // Verify token with database function
+      const { data: result, error } = await supabase
+        .rpc('verify_email_with_token', {
+          p_token: verificationToken.trim()
+        });
+
+      if (error) {
+        console.error('Token verification error:', error);
+        setTokenError('Invalid or expired verification token');
+        return;
+      }
+
+      if (result && result.success) {
+        Alert.alert('Success', 'Email verified successfully!');
+        onUpdate({ emailVerified: true });
+        onNext();
+      } else {
+        setTokenError(result?.message || 'Verification failed');
+      }
+    } catch (error) {
+      console.error('Verification error:', error);
+      setTokenError('An error occurred during verification');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  if (otpSent) {
+  const handleEmailChange = (text: string) => {
+    setEmail(text);
+    setEmailError('');
+  };
+
+  if (emailSent) {
     return (
       <View style={styles.container}>
         <Button
           mode="text"
-          onPress={() => setOtpSent(false)}
+          onPress={() => setEmailSent(false)}
           style={styles.backButton}
         >
           ← Back
         </Button>
 
-        <Text style={styles.title}>Verify Phone Number</Text>
+        <Text style={styles.title}>Verify Email Address</Text>
         <Text style={styles.subtitle}>
-          Enter the 6-digit OTP sent to {data.phone}
+          Enter the verification token sent to {email}
         </Text>
 
         <TextInput
-          label="OTP"
-          value={otp}
+          label="Verification Token"
+          value={verificationToken}
           onChangeText={(value) => {
-            setOtp(value);
-            setOtpError('');
+            setVerificationToken(value);
+            setTokenError('');
           }}
-          keyboardType="numeric"
-          maxLength={6}
           style={styles.input}
-          error={!!otpError}
+          error={!!tokenError}
+          placeholder="Enter token from email"
         />
-        <HelperText type="error" visible={!!otpError}>
-          {otpError}
+        <HelperText type="error" visible={!!tokenError}>
+          {tokenError}
         </HelperText>
 
-        <Button mode="contained" onPress={verifyOtp} style={styles.button}>
-          Verify & Continue
+        <Button
+          mode="contained"
+          onPress={verifyEmailToken}
+          style={styles.button}
+          disabled={!verificationToken.trim() || loading}
+        >
+          {loading ? <ActivityIndicator size="small" color="white" /> : 'Verify Email'}
         </Button>
 
-        <Button mode="text" onPress={sendOtp} style={styles.resendButton}>
-          Resend OTP
+        <Button mode="text" onPress={sendVerificationEmail} style={styles.resendButton} disabled={loading}>
+          Resend Verification Email
         </Button>
       </View>
     );
@@ -124,31 +171,33 @@ export default function PhoneVerificationStep({ data, onUpdate, onNext, onPrev }
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Phone Verification</Text>
+      <Text style={styles.title}>Email Verification</Text>
       <Text style={styles.subtitle}>
-        We need to verify your Philippine phone number for account security
+        We need to verify your email address for account security
       </Text>
 
       <TextInput
-        label="Phone Number"
-        value={data.phone}
-        onChangeText={handlePhoneChange}
-        keyboardType="phone-pad"
-        placeholder="+63 or 09..."
+        label="Email Address"
+        value={email}
+        onChangeText={handleEmailChange}
+        keyboardType="email-address"
+        autoCapitalize="none"
+        autoCorrect={false}
         style={styles.input}
-        error={!!phoneError}
+        error={!!emailError}
+        placeholder="your.email@example.com"
       />
-      <HelperText type="error" visible={!!phoneError}>
-        {phoneError}
+      <HelperText type="error" visible={!!emailError}>
+        {emailError}
       </HelperText>
 
       <Button
         mode="contained"
-        onPress={sendOtp}
+        onPress={sendVerificationEmail}
         style={styles.button}
-        disabled={!data.phone}
+        disabled={!email || loading}
       >
-        Send OTP
+        {loading ? <ActivityIndicator size="small" color="white" /> : 'Send Verification Email'}
       </Button>
 
       <Button mode="text" onPress={onPrev} style={styles.backButton}>

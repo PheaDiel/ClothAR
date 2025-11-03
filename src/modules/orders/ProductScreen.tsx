@@ -1,12 +1,15 @@
 import React, { useState, useContext, useEffect } from 'react';
-import { View, ScrollView, StyleSheet, Image, Alert, Modal, TouchableOpacity } from 'react-native';
+import { View, ScrollView, StyleSheet, Alert, Modal, TouchableOpacity } from 'react-native';
+import LazyImage from '../../components/LazyImage';
 import { Text, Button, RadioButton, TextInput, ActivityIndicator, Portal, IconButton, Chip } from 'react-native-paper';
 import AppHeader from '../../components/AppHeader';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import { CartContext } from '../../context/CartContext';
 import { AuthContext } from '../../context/AuthContext';
 import { Item, Measurement } from '../../types';
-import { getUserMeasurements } from '../../services/api';
+import { MeasurementService } from '../../services/measurementService';
+import { CartService } from '../../services/cartService';
+import { ProductService } from '../../services/productService';
 import { theme } from '../../theme/theme';
 import { wp, hp, rf, rmp, rw } from '../../utils/responsiveUtils';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,13 +19,18 @@ type ParamList = {
 };
 
 export default function ProductScreen() {
-  const route = useRoute<RouteProp<ParamList, 'Product'>>();
-  const navigation = useNavigation();
-  const item = route.params.item;
-  const { add } = useContext(CartContext);
-  const { user } = useContext(AuthContext);
+   const route = useRoute<RouteProp<ParamList, 'Product'>>();
+   const navigation = useNavigation();
+   const item = route.params.item;
+   const { add } = useContext(CartContext);
+   const { user } = useContext(AuthContext);
 
-  const isGuest = user?.isGuest || false;
+   // State for selected product variant
+   const [selectedVariant, setSelectedVariant] = useState<any>(null);
+   const [productVariants, setProductVariants] = useState<any[]>([]);
+   const [loadingVariants, setLoadingVariants] = useState(false);
+
+  const isGuest = user?.id === 'guest';
 
   // Measurements
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
@@ -47,32 +55,55 @@ export default function ProductScreen() {
   });
   const [savingNewMeasurement, setSavingNewMeasurement] = useState<boolean>(false);
 
-  // Fetch measurements on component mount
+  // Fetch measurements and product variants on component mount
   useEffect(() => {
-    const fetchMeasurements = async () => {
-      try {
-        const userMeasurements = await getUserMeasurements();
-        setMeasurements(userMeasurements);
-        // Set default measurement if available
-        if (userMeasurements.length > 0) {
-          const defaultMeasurement = userMeasurements.find(m => m.isDefault);
-          setSelectedMeasurement(defaultMeasurement ? defaultMeasurement._id! : userMeasurements[0]._id!);
+    const fetchData = async () => {
+      // Fetch measurements
+      if (!isGuest) {
+        try {
+          const measurementResult = await MeasurementService.getUserMeasurements();
+          if (measurementResult.success && measurementResult.measurements) {
+            setMeasurements(measurementResult.measurements);
+            // Set default measurement if available
+            if (measurementResult.measurements.length > 0) {
+              const defaultMeasurement = measurementResult.measurements.find(m => m.is_default);
+              setSelectedMeasurement(defaultMeasurement ? defaultMeasurement.id || '' : measurementResult.measurements[0].id || '');
+            }
+          } else {
+            setMeasurementError(true);
+            Alert.alert('Error', measurementResult.error || 'Failed to load measurements. You can still create new measurements.');
+          }
+          setMeasurementError(false);
+        } catch (error) {
+          setMeasurementError(true);
+          Alert.alert('Error', 'Failed to load measurements. You can still create new measurements.');
         }
-        setMeasurementError(false);
+      }
+
+      // Fetch product variants
+      try {
+        setLoadingVariants(true);
+        const variantResult = await ProductService.getProduct(item.id);
+        if (variantResult.success && variantResult.product) {
+          const variants = variantResult.product.variants || [];
+          setProductVariants(variants);
+
+          // Auto-select first available variant
+          if (variants.length > 0) {
+            const availableVariant = variants.find((v: any) => v.is_available && v.stock_quantity > 0);
+            setSelectedVariant(availableVariant || variants[0]);
+          }
+        }
       } catch (error) {
-        setMeasurementError(true);
-        Alert.alert('Error', 'Failed to load measurements. You can still create new measurements.');
+        console.error('Error loading product variants:', error);
       } finally {
+        setLoadingVariants(false);
         setLoadingMeasurements(false);
       }
     };
 
-    if (!isGuest) {
-      fetchMeasurements();
-    } else {
-      setLoadingMeasurements(false);
-    }
-  }, [isGuest]);
+    fetchData();
+  }, [isGuest, item.id]);
 
   // Update selected measurement based on option
   useEffect(() => {
@@ -80,15 +111,15 @@ export default function ProductScreen() {
       // Use a default measurement ID
       setSelectedMeasurement('default');
     } else if (measurementOption === 'named' && measurements.length > 0) {
-      const defaultMeasurement = measurements.find(m => m.isDefault);
-      setSelectedMeasurement(defaultMeasurement ? defaultMeasurement._id! : measurements[0]._id!);
+      const defaultMeasurement = measurements.find(m => m.is_default || m.isDefault);
+      setSelectedMeasurement(defaultMeasurement ? (defaultMeasurement.id || defaultMeasurement._id || '') : (measurements[0].id || measurements[0]._id || ''));
     } else if (measurementOption === 'new') {
       // Will be set when creating new
       setSelectedMeasurement('');
     }
   }, [measurementOption, measurements]);
 
-  const onAdd = () => {
+  const onAdd = async () => {
     if (isGuest) {
       Alert.alert(
         "Guest Access Limitation",
@@ -118,7 +149,7 @@ export default function ProductScreen() {
         Alert.alert('Error', 'Please select a measurement profile');
         return;
       }
-      const selectedMeasurementData = measurements.find(m => m._id === selectedMeasurement);
+      const selectedMeasurementData = measurements.find(m => (m.id || m._id) === selectedMeasurement);
       if (!selectedMeasurementData) {
         Alert.alert('Error', 'Selected measurement not found');
         return;
@@ -130,7 +161,7 @@ export default function ProductScreen() {
         Alert.alert('Error', 'Please create new measurements first');
         return;
       }
-      const newMeasurementData = measurements.find(m => m._id === selectedMeasurement);
+      const newMeasurementData = measurements.find(m => (m.id || m._id) === selectedMeasurement);
       measurementId = selectedMeasurement;
       measurementName = newMeasurementData!.name;
     } else if (measurementOption === 'on-site') {
@@ -138,13 +169,16 @@ export default function ProductScreen() {
       measurementName = 'On-site Measurement by Tailor';
     }
 
+    // Variant selection is now optional - no validation required
+
     // Calculate material fee (20% of item price if store provides)
     const materialFee = materialProvidedByCustomer ? 0 : Math.round(item.price * 0.2);
 
+    // Add to local cart context
     add({
-      itemId: item.id,
+      itemId: selectedVariant?.id || item.id, // Use variant ID if selected, otherwise use item ID
       name: item.name,
-      price: item.price,
+      price: selectedVariant?.price_modifier ? item.price + selectedVariant.price_modifier : item.price,
       measurementId,
       measurementName,
       quantity: qty,
@@ -153,6 +187,27 @@ export default function ProductScreen() {
       materialProvidedByCustomer,
       materialFee,
     });
+
+    // Also add to database cart (if user is logged in)
+    if (!isGuest) {
+      try {
+        const result = await CartService.addToCart(
+          selectedVariant?.id || item.id, // Use variant ID if selected, otherwise use item ID
+          qty,
+          measurementId !== 'default' ? measurementId : undefined,
+          selectedFabric ? undefined : undefined, // fabric_type_id if applicable
+          undefined // customizations
+        );
+
+        if (!result.success) {
+          console.warn('Failed to add to database cart:', result.error);
+          // Don't show error to user since local cart was successful
+        }
+      } catch (error) {
+        console.warn('Error adding to database cart:', error);
+        // Don't show error to user since local cart was successful
+      }
+    }
 
     Alert.alert(
       "Added to Pre-order Cart",
@@ -188,10 +243,8 @@ export default function ProductScreen() {
 
     setSavingNewMeasurement(true);
     try {
-      // Create new measurement object
-      const newMeasurement: Measurement = {
-        _id: `temp_${Date.now()}`, // Temporary ID for cart use
-        userId: user?.id || '',
+      // Create new measurement via service
+      const result = await MeasurementService.createMeasurement({
         name: newMeasurementForm.name.trim(),
         measurements: Object.fromEntries(
           Object.entries(newMeasurementForm.measurements)
@@ -199,13 +252,15 @@ export default function ProductScreen() {
             .filter(([, value]) => value !== undefined)
         ),
         isDefault: false,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      };
+      });
+
+      if (!result.success || !result.measurement) {
+        throw new Error(result.error || 'Failed to create measurement');
+      }
 
       // Add to local measurements list
-      setMeasurements(prev => [...prev, newMeasurement]);
-      setSelectedMeasurement(newMeasurement._id!);
+      setMeasurements(prev => [...prev, result.measurement!]);
+      setSelectedMeasurement(result.measurement.id || result.measurement._id || '');
 
       // Reset form and close modal
       setNewMeasurementForm({
@@ -236,9 +291,13 @@ export default function ProductScreen() {
     <View style={styles.container}>
       <AppHeader title="" />
       <ScrollView contentContainerStyle={styles.scrollContainer}>
-        <Image
-          source={typeof item.images?.[0] === 'string' ? { uri: item.images[0] } : { uri: 'https://via.placeholder.com/300x400.png?text=No+Image' } }
+        <LazyImage
+          source={typeof item.images?.[0] === 'string' ? { uri: item.images[0] } : { uri: 'https://via.placeholder.com/300x400.png?text=No+Image' }}
           style={styles.image}
+          placeholder="https://via.placeholder.com/300x400.png?text=Loading..."
+          resizeMode="cover"
+          priority="high"
+          quality={90}
         />
         
         {/* AR Try-on Button */}
@@ -330,11 +389,11 @@ export default function ProductScreen() {
                   <RadioButton.Group onValueChange={(v) => setSelectedMeasurement(v)} value={selectedMeasurement}>
                     <View style={styles.measurements}>
                       {measurements.map((m) => (
-                        <View key={m._id} style={styles.measurementOption}>
-                          <RadioButton value={m._id!} />
+                        <View key={m.id || m._id} style={styles.measurementOption}>
+                          <RadioButton value={m.id || m._id || ''} />
                           <View style={styles.measurementInfo}>
                             <Text style={styles.measurementName}>{m.name}</Text>
-                            {m.isDefault && <Text style={styles.defaultText}>(Default)</Text>}
+                            {(m.is_default || m.isDefault) && <Text style={styles.defaultText}>(Default)</Text>}
                           </View>
                         </View>
                       ))}
@@ -374,6 +433,48 @@ export default function ProductScreen() {
                   </Button>
                 </View>
               )}
+            </View>
+          )}
+
+          {/* Product Variants Selection */}
+          {productVariants.length > 0 && (
+            <View style={styles.variantsContainer}>
+              <Text variant="labelLarge" style={styles.variantsLabel}>
+                Select Size & Color
+              </Text>
+              <View style={styles.variantsGrid}>
+                {productVariants.map((variant: any) => (
+                  <TouchableOpacity
+                    key={variant.id}
+                    style={[
+                      styles.variantOption,
+                      selectedVariant?.id === variant.id && styles.variantOptionSelected,
+                      (!variant.is_available || variant.stock_quantity === 0) && styles.variantOptionDisabled
+                    ]}
+                    onPress={() => {
+                      if (variant.is_available && variant.stock_quantity > 0) {
+                        setSelectedVariant(variant);
+                      }
+                    }}
+                    disabled={!variant.is_available || variant.stock_quantity === 0}
+                  >
+                    <Text style={[
+                      styles.variantText,
+                      selectedVariant?.id === variant.id && styles.variantTextSelected,
+                      (!variant.is_available || variant.stock_quantity === 0) && styles.variantTextDisabled
+                    ]}>
+                      {variant.size} - {variant.color}
+                    </Text>
+                    <Text style={[
+                      styles.variantStock,
+                      selectedVariant?.id === variant.id && styles.variantStockSelected,
+                      (!variant.is_available || variant.stock_quantity === 0) && styles.variantStockDisabled
+                    ]}>
+                      Stock: {variant.stock_quantity}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
             </View>
           )}
 
@@ -910,5 +1011,60 @@ const styles = StyleSheet.create({
     color: theme.colors.surface,
     fontSize: rf(14),
     fontWeight: '600',
+  },
+  variantsContainer: {
+    marginBottom: wp(5),
+  },
+  variantsLabel: {
+    fontSize: rf(18),
+    fontWeight: 'bold',
+    marginBottom: wp(3),
+  },
+  variantsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: wp(2),
+  },
+  variantOption: {
+    paddingHorizontal: wp(3),
+    paddingVertical: hp(1.5),
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: wp(2),
+    backgroundColor: theme.colors.surface,
+    minWidth: wp(25),
+    alignItems: 'center',
+  },
+  variantOptionSelected: {
+    backgroundColor: theme.colors.primary,
+    borderColor: theme.colors.primary,
+  },
+  variantOptionDisabled: {
+    backgroundColor: theme.colors.surfaceVariant,
+    borderColor: theme.colors.border,
+    opacity: 0.5,
+  },
+  variantText: {
+    fontSize: rf(14),
+    color: theme.colors.textPrimary,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  variantTextSelected: {
+    color: theme.colors.surface,
+  },
+  variantTextDisabled: {
+    color: theme.colors.textSecondary,
+  },
+  variantStock: {
+    fontSize: rf(12),
+    color: theme.colors.textSecondary,
+    marginTop: hp(0.5),
+  },
+  variantStockSelected: {
+    color: theme.colors.surface,
+  },
+  variantStockDisabled: {
+    color: theme.colors.textLight,
   },
 });

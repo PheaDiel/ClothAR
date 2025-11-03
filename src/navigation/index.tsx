@@ -10,6 +10,7 @@ import LoginScreen from '../modules/auth/LoginScreen';
 import RegistrationFlow from '../modules/auth/RegistrationFlow';
 import ProfileSetupScreen from '../modules/auth/ProfileSetupScreen';
 import MeasurementOnboardingScreen from '../modules/auth/MeasurementOnboardingScreen';
+import PasswordResetScreen from '../modules/auth/PasswordResetScreen';
 import OnboardingScreen from '../modules/onboarding/OnboardingScreen';
 import DashboardScreen from '../modules/dashboard/DashboardScreen';
 import ChatScreen from '../modules/chat/ChatScreen';
@@ -20,10 +21,23 @@ import OrderConfirmationScreen from '../modules/orders/OrderConfirmationScreen';
 import OrderTrackingScreen from '../modules/orders/OrderTrackingScreen';
 import CameraScreen from '../modules/camera/CameraScreen';
 import ProfileScreen from '../modules/profile/ProfileScreen';
+import EditProfileScreen from '../modules/profile/EditProfileScreen';
 import BodyMeasurementForm from '../modules/measurements/BodyMeasurementForm';
 import MeasurementGuide from '../modules/measurements/MeasurementGuide';
 import HelpScreen from '../modules/help/HelpScreen';
 import NotificationsScreen from '../modules/notifications/NotificationsScreen';
+import AdminDashboardScreen from '../modules/admin/AdminDashboardScreen';
+import ProductManagementScreen from '../modules/admin/ProductManagementScreen';
+import FabricManagementScreen from '../modules/admin/FabricManagementScreen';
+import OrderManagementScreen from '../modules/admin/OrderManagementScreen';
+import InventoryManagementScreen from '../modules/admin/InventoryManagementScreen';
+import CustomerManagementScreen from '../modules/admin/CustomerManagementScreen';
+import AddEditProductScreen from '../modules/admin/AddEditProductScreen';
+import AddEditFabricScreen from '../modules/admin/AddEditFabricScreen';
+import FabricAnalyticsScreen from '../modules/admin/FabricAnalyticsScreen';
+import OrderDetailsScreen from '../modules/admin/OrderDetailsScreen';
+import ProductDetailsScreen from '../modules/admin/ProductDetailsScreen';
+import AdminChatScreen from '../modules/admin/AdminChatScreen';
 import { AuthContext } from '../context/AuthContext';
 import { CartContext, CartProvider } from '../context/CartContext';
 import { IconButton } from 'react-native-paper';
@@ -35,6 +49,7 @@ const Tabs = createBottomTabNavigator();
 
 function MainTabs() {
   const { count } = useContext(CartContext);
+  const { user } = useContext(AuthContext);
 
   return (
     <Tabs.Navigator
@@ -66,6 +81,8 @@ function MainTabs() {
             iconName = 'cart-outline';
           } else if (route.name === 'Profile') {
             iconName = 'person-outline';
+          } else if (route.name === 'Admin') {
+            iconName = 'shield-checkmark-outline';
           }
 
           const icon = <Ionicons name={iconName} size={28} color={color} />;
@@ -98,21 +115,35 @@ function MainTabs() {
         component={CameraScreen}
         options={{ tabBarLabel: 'AR Try-On' }}
       />
-      <Tabs.Screen
-        name="Chat"
-        component={ChatScreen}
-        options={{ tabBarLabel: 'Chat' }}
-      />
-      <Tabs.Screen
-        name="Cart"
-        component={CartScreen}
-        options={{ tabBarLabel: 'Cart' }}
-      />
+      {/* Hide Chat tab for admin users */}
+      {!user?.is_admin && (
+        <Tabs.Screen
+          name="Chat"
+          component={ChatScreen}
+          options={{ tabBarLabel: 'Chat' }}
+        />
+      )}
+      {/* Hide Cart tab for admin users */}
+      {!user?.is_admin && (
+        <Tabs.Screen
+          name="Cart"
+          component={CartScreen}
+          options={{ tabBarLabel: 'Cart' }}
+        />
+      )}
       <Tabs.Screen
         name="Profile"
         component={ProfileScreen}
         options={{ tabBarLabel: 'Profile' }}
       />
+      {/* Admin tab - only visible to admin users */}
+      {user?.is_admin && (
+        <Tabs.Screen
+          name="Admin"
+          component={AdminDashboardScreen}
+          options={{ tabBarLabel: 'Admin' }}
+        />
+      )}
     </Tabs.Navigator>
   );
 }
@@ -139,6 +170,17 @@ export default function RootNavigation() {
       setInitializing(false);
     }
   }, [isLoading]);
+
+  // Debug: Log user state changes
+  useEffect(() => {
+    console.log('🔄 Navigation - User state changed:', {
+      hasUser: !!user,
+      userId: user?.id,
+      profileComplete: user?.profileComplete,
+      isLoading,
+      initializing
+    });
+  }, [user, isLoading, initializing]);
 
   // Callback when onboarding is completed
   const handleOnboardingComplete = () => {
@@ -176,8 +218,13 @@ export default function RootNavigation() {
                 headerTitleStyle: { fontWeight: 'bold' }
               }}
             />
+            <Stack.Screen
+              name="PasswordReset"
+              component={PasswordResetScreen}
+              options={{ headerShown: false }}
+            />
           </>
-        ) : user.isGuest ? (
+        ) : (
           <>
             <Stack.Screen name="MainTabs" component={MainTabs} />
             <Stack.Screen
@@ -266,6 +313,13 @@ export default function RootNavigation() {
                 headerStyle: { backgroundColor: theme.colors.info },
                 headerTintColor: theme.colors.surface,
                 headerTitleStyle: { fontWeight: 'bold' }
+              }}
+            />
+            <Stack.Screen
+              name="EditProfile"
+              component={EditProfileScreen}
+              options={{
+                headerShown: false, // EditProfileScreen has its own header
               }}
             />
             <Stack.Screen
@@ -279,123 +333,139 @@ export default function RootNavigation() {
                 headerTitleStyle: { fontWeight: 'bold' }
               }}
             />
-          </>
-        ) : !user.profileComplete ? (
-           <>
-             <Stack.Screen
-               name="MeasurementOnboarding"
-               component={MeasurementOnboardingScreen}
-               options={{
-                 headerShown: true,
-                 title: 'Add Measurements',
-                 headerStyle: { backgroundColor: theme.colors.info },
-                 headerTintColor: theme.colors.surface,
-                 headerTitleStyle: { fontWeight: 'bold' }
-               }}
-             />
-             <Stack.Screen
-               name="ProfileSetup"
-               component={ProfileSetupScreen}
-               options={{
-                 headerShown: true,
-                 title: 'Complete Profile',
-                 headerStyle: { backgroundColor: theme.colors.info },
-                 headerTintColor: theme.colors.surface,
-                 headerTitleStyle: { fontWeight: 'bold' }
-               }}
-             />
-           </>
-         ) : (
-          <>
-            <Stack.Screen name="MainTabs" component={MainTabs} />
-            <Stack.Screen
-              name="Product"
-              component={ProductScreen}
-              options={{
-                headerShown: true,
-                title: 'Product Details',
-                headerStyle: { backgroundColor: theme.colors.info },
-                headerTintColor: theme.colors.surface,
-                headerTitleStyle: { fontWeight: 'bold' }
-              }}
-            />
-            <Stack.Screen
-              name="Checkout"
-              component={CheckoutScreen}
-              options={{
-                headerShown: true,
-                title: 'Pre-order Checkout',
-                headerStyle: { backgroundColor: theme.colors.info },
-                headerTintColor: theme.colors.surface,
-                headerTitleStyle: { fontWeight: 'bold' }
-              }}
-            />
-            <Stack.Screen
-              name="OrderConfirmation"
-              component={OrderConfirmationScreen}
-              options={{
-                headerShown: true,
-                title: 'Pre-order Confirmed',
-                headerStyle: { backgroundColor: theme.colors.info },
-                headerTintColor: theme.colors.surface,
-                headerTitleStyle: { fontWeight: 'bold' }
-              }}
-            />
-            <Stack.Screen
-              name="OrderTracking"
-              component={OrderTrackingScreen}
-              options={{
-                headerShown: true,
-                title: 'Pre-order Tracking',
-                headerStyle: { backgroundColor: theme.colors.info },
-                headerTintColor: theme.colors.surface,
-                headerTitleStyle: { fontWeight: 'bold' }
-              }}
-            />
-            <Stack.Screen
-              name="BodyMeasurementForm"
-              component={BodyMeasurementForm}
-              options={{
-                headerShown: true,
-                title: 'Body Measurements',
-                headerStyle: { backgroundColor: theme.colors.info },
-                headerTintColor: theme.colors.surface,
-                headerTitleStyle: { fontWeight: 'bold' }
-              }}
-            />
-            <Stack.Screen
-              name="MeasurementGuide"
-              component={MeasurementGuide}
-              options={{
-                headerShown: true,
-                title: 'Measurement Guide',
-                headerStyle: { backgroundColor: theme.colors.info },
-                headerTintColor: theme.colors.surface,
-                headerTitleStyle: { fontWeight: 'bold' }
-              }}
-            />
-            <Stack.Screen
-              name="HelpScreen"
-              component={HelpScreen}
-              options={{
-                headerShown: true,
-                title: 'Help & FAQ',
-                headerStyle: { backgroundColor: theme.colors.info },
-                headerTintColor: theme.colors.surface,
-                headerTitleStyle: { fontWeight: 'bold' }
-              }}
-            />
-            <Stack.Screen
-              name="Notifications"
-              component={NotificationsScreen}
-              options={{
-                headerShown: true,
-                title: 'Notifications',
-                headerStyle: { backgroundColor: theme.colors.info },
-                headerTintColor: theme.colors.surface,
-                headerTitleStyle: { fontWeight: 'bold' }
-              }}
-            />
+            {/* Admin Screens - Only accessible to admin users */}
+            {user?.is_admin && (
+              <>
+                <Stack.Screen
+                  name="AdminDashboard"
+                  component={AdminDashboardScreen}
+                  options={{
+                    headerShown: true,
+                    title: 'Admin Dashboard',
+                    headerStyle: { backgroundColor: theme.colors.primary },
+                    headerTintColor: theme.colors.surface,
+                    headerTitleStyle: { fontWeight: 'bold' }
+                  }}
+                />
+                <Stack.Screen
+                  name="ProductManagement"
+                  component={ProductManagementScreen}
+                  options={{
+                    headerShown: true,
+                    title: 'Product Management',
+                    headerStyle: { backgroundColor: theme.colors.primary },
+                    headerTintColor: theme.colors.surface,
+                    headerTitleStyle: { fontWeight: 'bold' }
+                  }}
+                />
+                <Stack.Screen
+                  name="FabricManagement"
+                  component={FabricManagementScreen}
+                  options={{
+                    headerShown: true,
+                    title: 'Fabric Management',
+                    headerStyle: { backgroundColor: theme.colors.primary },
+                    headerTintColor: theme.colors.surface,
+                    headerTitleStyle: { fontWeight: 'bold' }
+                  }}
+                />
+                <Stack.Screen
+                  name="OrderManagement"
+                  component={OrderManagementScreen}
+                  options={{
+                    headerShown: true,
+                    title: 'Order Management',
+                    headerStyle: { backgroundColor: theme.colors.primary },
+                    headerTintColor: theme.colors.surface,
+                    headerTitleStyle: { fontWeight: 'bold' }
+                  }}
+                />
+                <Stack.Screen
+                  name="InventoryManagement"
+                  component={InventoryManagementScreen}
+                  options={{
+                    headerShown: true,
+                    title: 'Inventory Management',
+                    headerStyle: { backgroundColor: theme.colors.primary },
+                    headerTintColor: theme.colors.surface,
+                    headerTitleStyle: { fontWeight: 'bold' }
+                  }}
+                />
+                <Stack.Screen
+                  name="CustomerManagement"
+                  component={CustomerManagementScreen}
+                  options={{
+                    headerShown: true,
+                    title: 'Customer Management',
+                    headerStyle: { backgroundColor: theme.colors.primary },
+                    headerTintColor: theme.colors.surface,
+                    headerTitleStyle: { fontWeight: 'bold' }
+                  }}
+                />
+                <Stack.Screen
+                  name="AddEditProduct"
+                  component={AddEditProductScreen}
+                  options={{
+                    headerShown: true,
+                    title: 'Add/Edit Product',
+                    headerStyle: { backgroundColor: theme.colors.primary },
+                    headerTintColor: theme.colors.surface,
+                    headerTitleStyle: { fontWeight: 'bold' }
+                  }}
+                />
+                <Stack.Screen
+                  name="AddEditFabric"
+                  component={AddEditFabricScreen}
+                  options={{
+                    headerShown: true,
+                    title: 'Add/Edit Fabric',
+                    headerStyle: { backgroundColor: theme.colors.primary },
+                    headerTintColor: theme.colors.surface,
+                    headerTitleStyle: { fontWeight: 'bold' }
+                  }}
+                />
+                <Stack.Screen
+                  name="FabricAnalytics"
+                  component={FabricAnalyticsScreen}
+                  options={{
+                    headerShown: true,
+                    title: 'Fabric Analytics',
+                    headerStyle: { backgroundColor: theme.colors.primary },
+                    headerTintColor: theme.colors.surface,
+                    headerTitleStyle: { fontWeight: 'bold' }
+                  }}
+                />
+                <Stack.Screen
+                  name="OrderDetails"
+                  component={OrderDetailsScreen}
+                  options={{
+                    headerShown: true,
+                    title: 'Order Details',
+                    headerStyle: { backgroundColor: theme.colors.primary },
+                    headerTintColor: theme.colors.surface,
+                    headerTitleStyle: { fontWeight: 'bold' }
+                  }}
+                />
+                <Stack.Screen
+                  name="ProductDetails"
+                  component={ProductDetailsScreen}
+                  options={{
+                    headerShown: true,
+                    title: 'Product Details',
+                    headerStyle: { backgroundColor: theme.colors.primary },
+                    headerTintColor: theme.colors.surface,
+                    headerTitleStyle: { fontWeight: 'bold' }
+                  }}
+                />
+                <Stack.Screen
+                  name="AdminChat"
+                  component={AdminChatScreen}
+                  options={{
+                    headerShown: false, // AdminChatScreen has its own header
+                  }}
+                />
+              </>
+            )}
           </>
         )}
       </Stack.Navigator>

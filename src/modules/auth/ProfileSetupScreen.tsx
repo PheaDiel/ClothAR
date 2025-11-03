@@ -13,7 +13,7 @@ export default function ProfileSetupScreen() {
 
   const onCompleteProfile = async () => {
     try {
-      const ok = await updateProfile(name.trim(), address.trim());
+      const ok = await updateProfile({ name: name.trim(), province_name: address.trim() });
       if (ok) {
         nav.navigate('MainTabs' as never);
       }

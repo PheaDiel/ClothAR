@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { AuthContext } from '../../context/AuthContext';
 import { Measurement } from '../../types';
+import { ProfileService } from '../../services/profileService';
 import NotificationIcon from '../../components/NotificationIcon';
 import { wp, hp, rf } from '../../utils/responsiveUtils';
 
@@ -63,7 +64,59 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
           text: "Logout",
           onPress: async () => {
             await logout();
-            navigation.replace('Login');
+            // Navigation will be handled automatically by the root navigator
+            // when the user state changes
+          }
+        }
+      ]
+    );
+  };
+
+  const handleSendVerification = async () => {
+    try {
+      const result = await ProfileService.sendEmailVerification();
+      if (result.success) {
+        Alert.alert(
+          'Verification Email Sent',
+          'Please check your email and click the verification link.',
+          [{ text: 'OK' }]
+        );
+      } else {
+        Alert.alert('Error', result.error || 'Failed to send verification email');
+      }
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'Failed to send verification email');
+    }
+  };
+
+  const handleRequestAccountDeletion = () => {
+    Alert.alert(
+      'Account Deletion',
+      'Are you sure you want to request account deletion? This action cannot be undone and your account will be permanently deleted after a review period.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Request Deletion',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const result = await ProfileService.requestAccountDeletion({
+                reason: 'User requested deletion from app',
+                confirm_deletion: true,
+              });
+
+              if (result.success) {
+                Alert.alert(
+                  'Deletion Requested',
+                  'Your account deletion request has been submitted. You will receive a confirmation email once the process is complete.',
+                  [{ text: 'OK' }]
+                );
+              } else {
+                Alert.alert('Error', result.error || 'Failed to request account deletion');
+              }
+            } catch (error: any) {
+              Alert.alert('Error', error.message || 'Failed to request account deletion');
+            }
           }
         }
       ]
@@ -71,12 +124,14 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
   };
 
   // For guest users, show limited profile information
-  const isGuest = user?.isGuest || false;
+  const isGuest = user?.id === 'guest';
   const userName = isGuest ? "Guest User" : (user?.name || "User");
   const userEmail = isGuest ? "guest@local" : (user?.email || "user@example.com");
-  const userAvatar = isGuest 
-    ? "https://cdn.vectorstock.com/i/1000v/28/66/gray-profile-silhouette-avatar-vector-21542866.jpg" 
-    : (user?.email ? `https://i.pravatar.cc/150?img=3` : "https://i.pravatar.cc/150?img=1");
+  const userAvatar = isGuest
+    ? "https://cdn.vectorstock.com/i/1000v/28/66/gray-profile-silhouette-avatar-vector-21542866.jpg"
+    : (user?.avatar_url || (user?.email ? `https://i.pravatar.cc/150?img=3` : "https://i.pravatar.cc/150?img=1"));
+
+  const needsVerification = user && !isGuest && user.verification_status !== 'verified';
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]} edges={['top', 'bottom', 'left', 'right']}>
@@ -95,13 +150,28 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
             <NotificationIcon navigation={navigation} />
           </View>
 
-          {!isGuest && (
-            <TouchableOpacity style={styles.editButton}>
-              <Ionicons name="create-outline" size={20} color="#fff" />
-              <Text style={styles.editText}>Edit Profile</Text>
-            </TouchableOpacity>
-          )}
         </View>
+
+        {/* Email Verification Prompt */}
+        {needsVerification && (
+          <View style={styles.verificationBanner}>
+            <View style={styles.verificationContent}>
+              <Ionicons name="mail-outline" size={24} color="#fff" />
+              <View style={styles.verificationText}>
+                <Text style={styles.verificationTitle}>Verify Your Email</Text>
+                <Text style={styles.verificationSubtitle}>
+                  Verify your email to access all features and receive important updates.
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              style={styles.verifyButton}
+              onPress={handleSendVerification}
+            >
+              <Text style={styles.verifyButtonText}>Verify Now</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* Profile Actions */}
         <View style={styles.actions}>
@@ -161,6 +231,19 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
             <Ionicons name="add-circle-outline" size={24} color="#2E86AB" />
             <Text style={styles.actionText}>Add New Measurements</Text>
           </TouchableOpacity>
+
+          {!isGuest && (
+            <TouchableOpacity
+              style={styles.actionItem}
+              onPress={handleRequestAccountDeletion}
+              accessible={true}
+              accessibilityLabel="Account Settings"
+              accessibilityHint="Manage account settings and deletion"
+            >
+              <Ionicons name="settings-outline" size={24} color="#2E86AB" />
+              <Text style={styles.actionText}>Account Settings</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* Saved Measurements */}
@@ -207,7 +290,7 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
                 onPress={async () => {
                   // Clear guest user and return to login
                   await logout();
-                  navigation.replace('Login');
+                  // Navigation will be handled automatically by the root navigator
                 }}
               >
                 <Text style={styles.backToLoginText}>Back to Login</Text>
@@ -395,5 +478,47 @@ const styles = StyleSheet.create({
   measurementDetails: {
     fontSize: wp(3.5),
     color: '#666',
+  },
+  verificationBanner: {
+    backgroundColor: '#2E86AB',
+    marginHorizontal: wp(4),
+    marginBottom: wp(2.5),
+    borderRadius: wp(2),
+    padding: wp(4),
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  verificationContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  verificationText: {
+    marginLeft: wp(3),
+    flex: 1,
+  },
+  verificationTitle: {
+    fontSize: rf(16),
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: wp(1),
+  },
+  verificationSubtitle: {
+    fontSize: rf(14),
+    color: '#fff',
+    opacity: 0.9,
+    lineHeight: rf(18),
+  },
+  verifyButton: {
+    backgroundColor: '#fff',
+    paddingHorizontal: wp(4),
+    paddingVertical: wp(2),
+    borderRadius: wp(5),
+  },
+  verifyButtonText: {
+    color: '#2E86AB',
+    fontWeight: '600',
+    fontSize: rf(14),
   },
 });

@@ -1,5 +1,7 @@
 import React, { createContext, useState, useContext, ReactNode, useEffect } from 'react';
 import { Notification } from '../types';
+import { NotificationService } from '../services/notificationService';
+import * as Notifications from 'expo-notifications';
 
 type NotificationContextType = {
   notifications: Notification[];
@@ -24,9 +26,10 @@ export const NotificationContext = createContext<NotificationContextType>({
 export const NotificationProvider = ({ children }: { children: ReactNode }) => {
   const [notifications, setNotifications] = useState<Notification[]>([]);
 
-  // Load notifications from storage on mount
+  // Load notifications from storage on mount and setup push notifications
   useEffect(() => {
     loadNotifications();
+    setupPushNotifications();
   }, []);
 
   const loadNotifications = async () => {
@@ -53,6 +56,40 @@ export const NotificationProvider = ({ children }: { children: ReactNode }) => {
       ];
       setNotifications(mockNotifications);
     } catch (error) {
+    }
+  };
+
+  const setupPushNotifications = async () => {
+    try {
+      await NotificationService.requestPermissions();
+
+      // Listen for incoming notifications
+      const receivedSubscription = NotificationService.addNotificationReceivedListener(notification => {
+        // Add to in-app notifications
+        addNotification({
+          type: 'order_status',
+          title: notification.request.content.title || 'Notification',
+          message: notification.request.content.body || '',
+          orderId: notification.request.content.data?.orderId as string,
+        });
+      });
+
+      // Listen for notification interactions
+      const responseSubscription = NotificationService.addNotificationResponseReceivedListener(response => {
+        const data = response.notification.request.content.data;
+        if (data?.orderId) {
+          // Handle navigation to order details or similar
+          console.log('Notification tapped for order:', data.orderId);
+        }
+      });
+
+      // Cleanup subscriptions on unmount
+      return () => {
+        receivedSubscription?.remove();
+        responseSubscription?.remove();
+      };
+    } catch (error) {
+      console.warn('Failed to setup push notifications:', error);
     }
   };
 

@@ -13,33 +13,43 @@ import { RouteProp, useRoute } from '@react-navigation/native';
 import { AuthContext } from '../../context/AuthContext';
 import { Order, OrderStatus } from '../../types';
 import { BUSINESS_LOCATION } from '../../constants';
+import { OrderService } from '../../services/orderService';
 
 type ParamList = {
   OrderTracking: { orderId?: string; order?: Order };
 };
 
 const STATUS_STEPS = [
-  { key: 'pending', label: 'Pre-order Placed', description: 'Your pre-order has been received' },
-  { key: 'accepted', label: 'Pre-order Accepted', description: 'Your pre-order has been confirmed' },
-  { key: 'in_progress', label: 'In Progress', description: 'Your custom tailoring is being prepared' },
-  { key: 'completed', label: 'Ready for Pickup', description: 'Your pre-order is ready for collection' },
-  { key: 'cancelled', label: 'Cancelled', description: 'Pre-order has been cancelled' }
-];
+   { key: 'pending', label: 'Pre-order Placed', description: 'Your pre-order has been received' },
+   { key: 'confirmed', label: 'Payment Confirmed', description: 'Your payment has been verified' },
+   { key: 'processing', label: 'Processing', description: 'Your order is being prepared' },
+   { key: 'tailoring', label: 'Tailoring', description: 'Your custom tailoring is in progress' },
+   { key: 'quality_check', label: 'Quality Check', description: 'Final quality inspection' },
+   { key: 'ready_for_delivery', label: 'Ready for Delivery', description: 'Your order is ready for delivery' },
+   { key: 'shipped', label: 'Shipped', description: 'Your order has been shipped' },
+   { key: 'delivered', label: 'Delivered', description: 'Your order has been delivered' },
+   { key: 'cancelled', label: 'Cancelled', description: 'Order has been cancelled' }
+ ];
 
 const getStatusIndex = (status: OrderStatus) => {
   return STATUS_STEPS.findIndex(step => step.key === status) || 0;
 };
 
 const getStatusColor = (status: OrderStatus) => {
-  switch (status) {
-    case 'pending': return '#FFA726';
-    case 'accepted': return '#42A5F5';
-    case 'in_progress': return '#AB47BC';
-    case 'completed': return '#66BB6A';
-    case 'cancelled': return '#EF5350';
-    default: return '#999';
-  }
-};
+   switch (status) {
+     case 'pending': return '#FFA726';
+     case 'confirmed': return '#42A5F5';
+     case 'processing': return '#AB47BC';
+     case 'tailoring': return '#9C27B0';
+     case 'quality_check': return '#FF9800';
+     case 'ready_for_delivery': return '#2196F3';
+     case 'shipped': return '#00BCD4';
+     case 'delivered': return '#4CAF50';
+     case 'cancelled': return '#EF5350';
+     case 'refunded': return '#9E9E9E';
+     default: return '#999';
+   }
+ };
 
 export default function OrderTrackingScreen({ navigation }: any) {
   const route = useRoute<RouteProp<ParamList, 'OrderTracking'>>();
@@ -58,42 +68,18 @@ export default function OrderTrackingScreen({ navigation }: any) {
 
   const loadOrderDetails = async () => {
     try {
-      // Mock order data - replace with actual API call
-      const mockOrder: Order = {
-        _id: orderId || '12345',
-        userId: user?.id || '',
-        items: [
-          {
-            itemId: '1',
-            name: 'Classic White Shirt',
-            price: 499,
-            measurementId: 'meas1',
-            measurementName: 'My Measurements',
-            quantity: 1,
-            tailoringRequest: {
-              measurementId: 'meas1',
-              customizations: 'Slim fit, shorter sleeves',
-              notes: 'Please ensure comfortable fit'
-            }
-          }
-        ],
-        totalAmount: 499,
-        status: 'in_progress',
-        shippingAddress: {
-          street: 'Store Pickup',
-          city: 'BGC',
-          state: 'Taguig City',
-          zipCode: '1634',
-          country: 'Philippines'
-        },
-        paymentMethod: 'GCash - Full Payment',
-        tailoringRequired: true,
-        createdAt: new Date(Date.now() - 86400000), // 1 day ago
-        updatedAt: new Date()
-      };
-      setOrder(mockOrder);
-    } catch (error) {
-      Alert.alert('Error', 'Failed to load order details');
+      if (!orderId) {
+        throw new Error('Order ID is required');
+      }
+
+      const result = await OrderService.getOrder(orderId);
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to load order details');
+      }
+
+      setOrder(result.order || null);
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'Failed to load order details');
     } finally {
       setLoading(false);
     }
@@ -136,7 +122,7 @@ export default function OrderTrackingScreen({ navigation }: any) {
         <Card style={styles.orderCard}>
           <Card.Content>
             <View style={styles.orderHeader}>
-              <Text style={styles.orderId}>Order #{order._id}</Text>
+              <Text style={styles.orderId}>Order #{order.order_number || order._id}</Text>
               <Chip
                 mode="outlined"
                 style={[styles.statusChip, {
@@ -151,8 +137,30 @@ export default function OrderTrackingScreen({ navigation }: any) {
             </View>
 
             <Text style={styles.orderDate}>
-              Ordered on {order.createdAt?.toLocaleDateString()}
+              Ordered on {order.created_at ? new Date(order.created_at).toLocaleDateString() : order.createdAt?.toLocaleDateString()}
             </Text>
+
+            {/* Payment Verification Status */}
+            {order.payment_verification_status && order.payment_verification_status !== 'verified' && (
+              <View style={styles.paymentStatus}>
+                <Chip
+                  style={[
+                    styles.paymentChip,
+                    {
+                      backgroundColor: order.payment_verification_status === 'pending' ? '#FFF3E0' :
+                                      order.payment_verification_status === 'rejected' ? '#FFEBEE' : '#E8F5E8'
+                    }
+                  ]}
+                  textStyle={{
+                    color: order.payment_verification_status === 'pending' ? '#E65100' :
+                           order.payment_verification_status === 'rejected' ? '#C62828' : '#2E7D32'
+                  }}
+                >
+                  Payment: {order.payment_verification_status === 'pending' ? 'Under Review' :
+                           order.payment_verification_status === 'rejected' ? 'Rejected' : 'Verified'}
+                </Chip>
+              </View>
+            )}
 
             {order.tailoringRequired && (
               <View style={styles.tailoringBadge}>
@@ -251,16 +259,25 @@ export default function OrderTrackingScreen({ navigation }: any) {
                 ))}
               </View>
 
-              {order.status === 'in_progress' && (
+              {(order.status === 'processing' || order.status === 'tailoring') && (
                 <View style={styles.inProgressDetails}>
-                  <Text style={styles.inProgressTitle}>Tailoring Progress</Text>
-                  <Text style={styles.inProgressInfo}>Your custom tailoring is currently in progress</Text>
+                  <Text style={styles.inProgressTitle}>
+                    {order.status === 'processing' ? 'Processing Progress' : 'Tailoring Progress'}
+                  </Text>
+                  <Text style={styles.inProgressInfo}>
+                    {order.status === 'processing'
+                      ? 'Your order is being prepared'
+                      : 'Your custom tailoring is currently in progress'
+                    }
+                  </Text>
                   <ProgressBar
-                    progress={0.6} // Example: 60% complete
-                    color="#AB47BC"
+                    progress={order.status === 'processing' ? 0.3 : 0.7} // Example progress
+                    color={getStatusColor(order.status)}
                     style={styles.inProgressBar}
                   />
-                  <Text style={styles.inProgressPercentage}>60% Complete</Text>
+                  <Text style={styles.inProgressPercentage}>
+                    {order.status === 'processing' ? '30%' : '70%'} Complete
+                  </Text>
                 </View>
               )}
             </Card.Content>
@@ -640,5 +657,11 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#AB47BC',
     textAlign: 'center',
+  },
+  paymentStatus: {
+    marginTop: 8,
+  },
+  paymentChip: {
+    alignSelf: 'flex-start',
   },
 });

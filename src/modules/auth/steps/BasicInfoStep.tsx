@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { View, StyleSheet, Alert } from 'react-native';
-import { TextInput, Button, HelperText, Text } from 'react-native-paper';
+import { View, StyleSheet, Alert, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { TextInput, Button, HelperText, Text, Menu } from 'react-native-paper';
 import PasswordInput from '../../../components/PasswordInput';
 import { RegistrationData } from '../../../types';
 import { wp, rf } from '../../../utils/responsiveUtils';
@@ -12,8 +12,16 @@ interface BasicInfoStepProps {
 }
 
 export default function BasicInfoStep({ data, onUpdate, onNext }: BasicInfoStepProps) {
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [errors, setErrors] = useState<{[key: string]: string}>({});
+    const [confirmPassword, setConfirmPassword] = useState('');
+     const [errors, setErrors] = useState<{[key: string]: string}>({});
+
+  // Set default role to customer on component mount
+  React.useEffect(() => {
+    if (!data.role_request) {
+      onUpdate({ role_request: 'customer' });
+    }
+  }, []);
+
 
   const validateEmail = (email: string) => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -49,6 +57,14 @@ export default function BasicInfoStep({ data, onUpdate, onNext }: BasicInfoStepP
       newErrors.confirmPassword = 'Passwords do not match';
     }
 
+    if (!data.phone.trim()) {
+      newErrors.phone = 'Phone number is required';
+    } else if (!/^\+?[\d\s-()]{10,}$/.test(data.phone.replace(/\s/g, ''))) {
+      newErrors.phone = 'Please enter a valid phone number';
+    }
+
+    // Role is now automatically set to customer, no validation needed
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -60,7 +76,17 @@ export default function BasicInfoStep({ data, onUpdate, onNext }: BasicInfoStepP
   };
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
+    >
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <View>
       <Text style={styles.title}>Basic Information</Text>
       <Text style={styles.subtitle}>Please provide your basic details to create an account</Text>
 
@@ -122,21 +148,44 @@ export default function BasicInfoStep({ data, onUpdate, onNext }: BasicInfoStepP
         {errors.confirmPassword}
       </HelperText>
 
-      <Button
-        mode="contained"
-        onPress={handleNext}
-        style={styles.button}
-        disabled={!data.name || !data.email || !data.password || !confirmPassword}
-      >
-        Next
-      </Button>
-    </View>
+      <TextInput
+        label="Phone Number"
+        value={data.phone}
+        onChangeText={(value) => {
+          onUpdate({ phone: value });
+          if (errors.phone) setErrors(prev => ({ ...prev, phone: '' }));
+        }}
+        keyboardType="phone-pad"
+        style={styles.input}
+        error={!!errors.phone}
+      />
+      <HelperText type="error" visible={!!errors.phone}>
+        {errors.phone}
+      </HelperText>
+
+
+           <Button
+            mode="contained"
+            onPress={handleNext}
+            style={styles.nextButton}
+            contentStyle={styles.nextButtonContent}
+            disabled={!data.name || !data.email || !data.password || !confirmPassword || !data.phone}
+          >
+            Next
+          </Button>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    paddingBottom: wp(8),
   },
   title: {
     fontSize: rf(20),
@@ -152,8 +201,19 @@ const styles = StyleSheet.create({
   input: {
     marginBottom: wp(1),
   },
-  button: {
+  nextButton: {
     marginTop: wp(4),
-    paddingVertical: wp(2),
+  },
+  nextButtonContent: {
+    height: wp(12),
+  },
+  pickerContainer: {
+    marginBottom: wp(4),
+  },
+  label: {
+    fontSize: rf(16),
+    fontWeight: '600',
+    marginBottom: wp(2),
+    color: '#333',
   },
 });

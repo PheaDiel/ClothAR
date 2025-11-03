@@ -1,9 +1,18 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useContext } from 'react';
 import { View, StyleSheet, FlatList, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Text, TextInput, Button, Card, Avatar } from 'react-native-paper';
 import AppHeader from '../../components/AppHeader';
 import { wp, hp } from '../../utils/responsiveUtils';
+import { AuthContext } from '../../context/AuthContext';
+import {
+  getCustomerConversation,
+  getOrCreateConversation,
+  sendMessage,
+  getConversationMessages,
+  subscribeToMessages,
+  ChatMessage
+} from '../../services/chatService';
 
 interface Message {
   id: string;
@@ -13,54 +22,101 @@ interface Message {
 }
 
 const ChatScreen = () => {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      text: 'Hello! How can I help you with your clothing pre-order today?',
-      sender: 'bot',
-      timestamp: new Date(),
-    },
-  ]);
+  const { user } = useContext(AuthContext);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const flatListRef = useRef<FlatList>(null);
 
-  const sendMessage = () => {
-    if (!inputText.trim()) return;
+  const sendMessage = async () => {
+    if (!inputText.trim() || !conversationId) return;
 
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      text: inputText,
-      sender: 'user',
-      timestamp: new Date(),
-    };
+    const messageId = Date.now().toString();
 
-    setMessages(prev => [...prev, userMessage]);
-    setInputText('');
-
-    // Simulate bot/admin response
-    setTimeout(() => {
-      const botResponse: Message = {
-        id: (Date.now() + 1).toString(),
-        text: getBotResponse(inputText),
-        sender: Math.random() > 0.5 ? 'bot' : 'admin',
+    try {
+      const userMessage: Message = {
+        id: messageId,
+        text: inputText,
+        sender: 'user',
         timestamp: new Date(),
       };
-      setMessages(prev => [...prev, botResponse]);
-    }, 1000);
-  };
 
-  const getBotResponse = (userInput: string): string => {
-    const input = userInput.toLowerCase();
-    if (input.includes('order') || input.includes('pre-order')) {
-      return 'For pre-orders, we offer GCash payment with full payment or installments, and pay on pickup options. What would you like to know?';
-    } else if (input.includes('payment') || input.includes('gcash')) {
-      return 'You can pay via GCash for full amount or in installments. We also accept payment upon pickup.';
-    } else if (input.includes('pickup')) {
-      return 'Pickup is available at our store location. No delivery service is offered.';
-    } else {
-      return 'I\'m here to help with your clothing pre-orders, payment options, and pickup arrangements. Feel free to ask!';
+      setMessages(prev => [...prev, userMessage]);
+      setInputText('');
+
+      // Send message to database
+      const chatService = await import('../../services/chatService');
+      await chatService.sendMessage(conversationId, inputText, 'customer');
+    } catch (error) {
+      console.error('Error sending message:', error);
+      // Revert optimistic update on error
+      setMessages(prev => prev.filter(msg => msg.id !== messageId));
     }
   };
+
+  // Load conversation and messages on component mount
+  useEffect(() => {
+    loadConversation();
+  }, []);
+
+  const loadConversation = async () => {
+    try {
+      setLoading(true);
+      const chatService = await import('../../services/chatService');
+      const conversation = await chatService.getCustomerConversation();
+
+      if (conversation) {
+        setConversationId(conversation.id);
+        const chatMessages = await chatService.getConversationMessages(conversation.id);
+        const formattedMessages: Message[] = chatMessages.map(msg => ({
+          id: msg.id,
+          text: msg.message_text,
+          sender: msg.sender_type === 'customer' ? 'user' : 'admin',
+          timestamp: new Date(msg.created_at),
+        }));
+        setMessages(formattedMessages);
+      } else {
+        // Create new conversation if none exists
+        const newConversation = await chatService.getOrCreateConversation(user?.id || '');
+        setConversationId(newConversation.id);
+        setMessages([]);
+      }
+    } catch (error) {
+      console.error('Error loading conversation:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Subscribe to new messages
+  useEffect(() => {
+    if (!conversationId) return;
+
+    const chatService = import('../../services/chatService');
+    let unsubscribe: (() => void) | null = null;
+
+    chatService.then((service) => {
+      unsubscribe = service.subscribeToMessages(conversationId, (newMessage: ChatMessage) => {
+        const formattedMessage: Message = {
+          id: newMessage.id,
+          text: newMessage.message_text,
+          sender: newMessage.sender_type === 'customer' ? 'user' : 'admin',
+          timestamp: new Date(newMessage.created_at),
+        };
+        setMessages(prev => {
+          // Check if message already exists to prevent duplicates
+          const exists = prev.some(msg => msg.id === formattedMessage.id);
+          if (exists) return prev;
+          return [...prev, formattedMessage];
+        });
+      });
+    });
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [conversationId]);
 
   const renderMessage = ({ item }: { item: Message }) => {
     const isUser = item.sender === 'user';
@@ -88,6 +144,17 @@ const ChatScreen = () => {
   useEffect(() => {
     flatListRef.current?.scrollToEnd({ animated: true });
   }, [messages]);
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <AppHeader title="Chat with Admin" />
+        <View style={styles.loadingContainer}>
+          <Text>Loading conversation...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -125,6 +192,11 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   messagesList: {
     flex: 1,

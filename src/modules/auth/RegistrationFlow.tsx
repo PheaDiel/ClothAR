@@ -11,13 +11,11 @@ import { wp, rf } from '../../utils/responsiveUtils';
 
 // Import step components (will create them next)
 import BasicInfoStep from './steps/BasicInfoStep.tsx';
-import PhoneVerificationStep from './steps/PhoneVerificationStep.tsx';
 import AddressStep from './steps/AddressStep.tsx';
-import MeasurementsStep from './steps/MeasurementsStep.tsx';
 
 const STORAGE_KEY = 'registration_progress';
 
-const stepLabels = ['Basic Info', 'Phone Verification', 'Address', 'Measurements'];
+const stepLabels = ['Basic Info', 'Address'];
 const stepIndicatorStyles = {
   stepIndicatorSize: 30,
   currentStepIndicatorSize: 40,
@@ -54,9 +52,10 @@ export default function RegistrationFlow() {
      province: defaultProvince,
      city: null,
      barangay: null,
+     role_request: null,
    });
   const [loading, setLoading] = useState(false);
-  const { register } = useContext(AuthContext);
+  const { register, updateProfile } = useContext(AuthContext);
   const navigation = useNavigation();
 
   // Load saved progress on mount
@@ -121,20 +120,61 @@ export default function RegistrationFlow() {
   const handleComplete = async () => {
     setLoading(true);
     try {
-      const address = `${registrationData.barangay}, ${registrationData.city?.name}, ${registrationData.province?.name}`;
+      // Role is now automatically set to 'customer' in BasicInfoStep, no need to validate
+
       const success = await register(
         registrationData.name,
         registrationData.email,
         registrationData.password,
         registrationData.phone,
-        address
+        registrationData.role_request || 'customer' // Fallback to customer if not set
       );
+
       if (success) {
+        // Update profile with address and measurements
+        await updateProfile({
+          province_code: registrationData.province?.code,
+          province_name: registrationData.province?.name,
+          city_code: registrationData.city?.code,
+          city_name: registrationData.city?.name,
+          barangay: registrationData.barangay || undefined,
+          profileComplete: true,
+        });
+
         await clearProgress();
-        navigation.navigate('MainTabs' as never);
+
+        // Clear registration data from state to prevent persistence
+        setRegistrationData({
+          name: '',
+          email: '',
+          password: '',
+          phone: '',
+          province: defaultProvince,
+          city: null,
+          barangay: null,
+          role_request: null,
+        });
+        setCurrentStep(0);
+
+        // Show success message
+        Alert.alert(
+          'Registration Successful!',
+          'Your account has been created. You will now be redirected to the dashboard.',
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                // Navigation will happen automatically when user state updates
+                // The RootNavigation component will detect the user is logged in
+                // and navigate to the appropriate screen
+              }
+            }
+          ]
+        );
       }
-    } catch (error) {
-      Alert.alert('Registration Failed', 'Please try again.');
+    } catch (error: any) {
+      console.error('Registration error:', error);
+      Alert.alert('Registration Failed', error.message || 'Please try again.');
     } finally {
       setLoading(false);
     }
@@ -152,29 +192,12 @@ export default function RegistrationFlow() {
         );
       case 1:
         return (
-          <PhoneVerificationStep
-            data={registrationData}
-            onUpdate={updateRegistrationData}
-            onNext={nextStep}
-            onPrev={prevStep}
-          />
-        );
-      case 2:
-        return (
           <AddressStep
             data={registrationData}
             locations={philippineLocations as PhilippineLocations}
             onUpdate={updateRegistrationData}
-            onNext={nextStep}
+            onNext={handleComplete}
             onPrev={prevStep}
-          />
-        );
-      case 3:
-        return (
-          <MeasurementsStep
-            onComplete={handleComplete}
-            onPrev={prevStep}
-            loading={loading}
           />
         );
       default:
@@ -194,7 +217,7 @@ export default function RegistrationFlow() {
         />
       </View>
 
-      {currentStep === 3 ? (
+      {currentStep === 0 || currentStep === 2 ? (
         <View style={styles.content}>
           {renderStep()}
         </View>

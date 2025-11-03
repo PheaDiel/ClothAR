@@ -32,13 +32,20 @@ export default function MeasurementsStep({ onComplete, onPrev, loading }: Measur
         </View>
 
         <View style={styles.buttonContainer}>
-          <Button mode="outlined" onPress={onPrev} style={styles.backButton} disabled={loading}>
+          <Button
+            mode="outlined"
+            onPress={onPrev}
+            style={styles.backButton}
+            contentStyle={styles.backButtonContent}
+            disabled={loading}
+          >
             Back
           </Button>
           <Button
             mode="contained"
             onPress={onComplete}
             style={styles.completeButton}
+            contentStyle={styles.completeButtonContent}
             loading={loading}
             disabled={loading}
           >
@@ -69,11 +76,12 @@ const styles = StyleSheet.create({
     },
     content: {
       flex: 1,
-      maxHeight: '70%', // Allow more space for the form and its button
+      minHeight: 0,
     },
     buttonContainer: {
       flexDirection: 'row',
       justifyContent: 'space-between',
+      alignItems: 'center',
       paddingTop: wp(2),
       paddingBottom: wp(2),
       paddingHorizontal: wp(4),
@@ -88,5 +96,11 @@ const styles = StyleSheet.create({
     completeButton: {
       flex: 1,
       marginLeft: wp(2),
+    },
+    backButtonContent: {
+      height: wp(12),
+    },
+    completeButtonContent: {
+      height: wp(12),
     },
   });

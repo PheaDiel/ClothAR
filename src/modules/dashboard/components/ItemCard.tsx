@@ -1,19 +1,26 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { View, StyleSheet, Dimensions } from 'react-native';
 import { Card, Text, Button } from 'react-native-paper';
 import { Item } from '../../../types';
 import { wp, getNumColumns } from '../../../utils/responsiveUtils';
+import LazyImage from '../../../components/LazyImage';
 
-export default function ItemCard({ item, onPress }: { item: Item; onPress?: () => void }) {
-  const numColumns = getNumColumns();
-  const screenWidth = Dimensions.get('window').width;
-  const cardWidth = (screenWidth - wp(6)) / numColumns - wp(2); // Account for padding and margins
+const ItemCard = React.memo(function ItemCard({ item, onPress }: { item: Item; onPress?: () => void }) {
+  const numColumns = useMemo(() => getNumColumns(), []);
+  const cardWidth = useMemo(() => {
+    const screenWidth = Dimensions.get('window').width;
+    return (screenWidth - wp(6)) / numColumns - wp(2);
+  }, [numColumns]);
 
   return (
     <Card style={[styles.card, { width: cardWidth }]} onPress={onPress}>
-      <Card.Cover
+      <LazyImage
         source={item.images?.[0] ? (typeof item.images[0] === 'string' ? { uri: item.images[0] } : item.images[0]) : { uri: 'https://via.placeholder.com/300x400.png?text=No+Image' }}
         style={styles.cardCover}
+        placeholder="https://via.placeholder.com/300x400.png?text=Loading..."
+        resizeMode="cover"
+        priority="low"
+        quality={75}
       />
       <Card.Content style={styles.cardContent}>
         <Text variant="titleMedium" numberOfLines={2} style={styles.title}>
@@ -30,7 +37,9 @@ export default function ItemCard({ item, onPress }: { item: Item; onPress?: () =
       </Card.Actions>
     </Card>
   );
-}
+});
+
+export default ItemCard;
 
 const styles = StyleSheet.create({
   card: {

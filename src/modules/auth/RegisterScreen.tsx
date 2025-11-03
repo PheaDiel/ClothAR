@@ -44,7 +44,7 @@ export default function RegisterScreen() {
 
   const onRegister = async () => {
     try {
-      const ok = await register(name.trim(), email.trim(), password.trim(), phone.trim());
+      const ok = await register(name.trim(), email.trim(), password.trim(), phone.trim(), 'customer');
       if (ok) {
         nav.navigate('MeasurementOnboarding' as never);
       }

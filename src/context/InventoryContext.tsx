@@ -2,6 +2,7 @@ import React, { createContext, ReactNode, useState, useEffect } from 'react';
 import { Item } from '../types';
 import { load, save } from '../services/storage';
 import { v4 as uuidv4 } from 'uuid';
+import { ProductService } from '../services/productService';
 
 type InventoryContextType = {
   items: Item[];
@@ -100,11 +101,39 @@ const SAMPLE: Item[] = [
 ];
 
 export const InventoryProvider = ({ children }: { children: ReactNode }) => {
-   const [items, setItems] = useState<Item[]>(SAMPLE);
+    const [items, setItems] = useState<Item[]>([]);
 
   const reload = async () => {
-    await save('@inventory_items', SAMPLE);
-    setItems(SAMPLE);
+    try {
+      // Try to load real products from database first
+      const result = await ProductService.getProducts();
+      if (result.success && result.products) {
+        // Transform database products to Item format
+        const transformedItems: Item[] = result.products.map(product => ({
+          id: product.id,
+          name: product.name,
+          price: product.base_price,
+          images: product.images,
+          category: product.category,
+          sizes: [], // Will be populated from variants if needed
+          stock: {}, // Will be populated from variants if needed
+          description: product.description || '',
+          fabricTypes: [], // Will be populated if available
+        }));
+        setItems(transformedItems);
+        await save('@inventory_items', transformedItems);
+      } else {
+        // Fallback to sample data if database is not available
+        console.warn('Failed to load products from database, using sample data');
+        setItems(SAMPLE);
+        await save('@inventory_items', SAMPLE);
+      }
+    } catch (error) {
+      console.error('Error loading inventory:', error);
+      // Fallback to sample data
+      setItems(SAMPLE);
+      await save('@inventory_items', SAMPLE);
+    }
   };
 
   useEffect(() => {

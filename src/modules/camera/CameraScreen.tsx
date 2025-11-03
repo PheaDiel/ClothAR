@@ -1,13 +1,11 @@
 // src/modules/camera/CameraScreen.tsx
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Alert, Dimensions, TouchableOpacity, ScrollView, StatusBar } from 'react-native';
+import { View, Text, StyleSheet, Alert, Dimensions, TouchableOpacity, ScrollView, StatusBar, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, Camera } from 'expo-camera';
 import { Button, Card, IconButton, useTheme } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import * as ScreenOrientation from 'expo-screen-orientation';
-import { GLView } from 'expo-gl';
-import * as THREE from 'three';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -17,8 +15,10 @@ import Animated, {
   runOnJS,
 } from 'react-native-reanimated';
 import { PanGestureHandler, TapGestureHandler } from 'react-native-gesture-handler';
-import { isARSupported } from '../../utils/arUtils';
+import { isARSupported, detectBodyPose, renderClothingOverlay, ClothingOverlay, initializeAR, BodyLandmarks } from '../../utils/arUtils';
+import { ProductService } from '../../services/productService';
 import { wp, hp, rf, rw, rh } from '../../utils/responsiveUtils';
+import VirtualTryOnTutorial, { shouldShowVirtualTryOnTutorial } from '../../components/VirtualTryOnTutorial';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
@@ -30,21 +30,24 @@ export default function CameraScreen() {
   const [isARMode, setIsARMode] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
-  const [arRenderer, setArRenderer] = useState<any>(null);
-  const [scene, setScene] = useState<any>(null);
-  const [camera, setCamera] = useState<any>(null);
-  const [clothingModel, setClothingModel] = useState<any>(null);
+  const [bodyPose, setBodyPose] = useState<any>(null);
+  const [clothingOverlay, setClothingOverlay] = useState<ClothingOverlay | null>(null);
   const [selectedClothing, setSelectedClothing] = useState<any>(null);
-  const [clothingItems, setClothingItems] = useState([
-    { id: 1, name: 'T-Shirt', category: 'tops', color: theme.colors.primary },
-    { id: 2, name: 'Jeans', category: 'bottoms', color: theme.colors.secondary },
-    { id: 3, name: 'Dress', category: 'dresses', color: theme.colors.tertiary },
-    { id: 4, name: 'Jacket', category: 'outerwear', color: '#FF6B6B' },
-  ]);
+  const [clothingItems, setClothingItems] = useState<any[]>([]);
   const [arSettings, setArSettings] = useState({
     showGrid: false,
     showLandmarks: false,
-    clothingOpacity: 1.0,
+    clothingOpacity: 0.8,
+    enableRealTimePose: true,
+  });
+  const [showTutorial, setShowTutorial] = useState(false);
+  const [isLoadingPose, setIsLoadingPose] = useState(false);
+  const [poseDetectionError, setPoseDetectionError] = useState<string | null>(null);
+  const [isProcessingFrame, setIsProcessingFrame] = useState(false);
+  const [performanceMetrics, setPerformanceMetrics] = useState({
+    fps: 0,
+    processingTime: 0,
+    lastFrameTime: Date.now(),
   });
 
   // Animation values
@@ -57,6 +60,48 @@ export default function CameraScreen() {
   const cameraRef = useRef<any>(null);
   const glViewRef = useRef<any>(null);
   const hideControlsTimer = useRef<NodeJS.Timeout | null>(null);
+  const frameProcessingTimer = useRef<NodeJS.Timeout | null>(null);
+  const frameCount = useRef(0);
+  const lastFrameTime = useRef(Date.now());
+
+  // Load clothing items from product service
+  const loadClothingItems = async () => {
+    try {
+      const result = await ProductService.getProducts();
+      if (result.success && result.products) {
+        // Transform products to clothing items format
+        const transformedItems = result.products.map(product => ({
+          id: product.id,
+          name: product.name,
+          category: product.category,
+          images: product.images,
+          virtual_tryon_images: product.virtual_tryon_images,
+          price: product.base_price,
+        }));
+        setClothingItems(transformedItems);
+      }
+    } catch (error) {
+      console.error('Error loading clothing items:', error);
+      // Fallback to placeholder items
+      setClothingItems([
+        { id: '1', name: 'T-Shirt', category: 'tops', images: [], virtual_tryon_images: [], price: 29.99 },
+        { id: '2', name: 'Jeans', category: 'bottoms', images: [], virtual_tryon_images: [], price: 59.99 },
+        { id: '3', name: 'Dress', category: 'dresses', images: [], virtual_tryon_images: [], price: 89.99 },
+        { id: '4', name: 'Jacket', category: 'outerwear', images: [], virtual_tryon_images: [], price: 119.99 },
+      ]);
+    }
+  };
+
+  const checkTutorialStatus = async () => {
+    try {
+      const shouldShow = await shouldShowVirtualTryOnTutorial();
+      if (shouldShow) {
+        setShowTutorial(true);
+      }
+    } catch (error) {
+      console.error('Error checking tutorial status:', error);
+    }
+  };
 
   useEffect(() => {
     (async () => {
@@ -75,6 +120,12 @@ export default function CameraScreen() {
         // Initialize controls visibility and start auto-hide timer
         controlsVisible.value = withTiming(1, { duration: 500 });
         startAutoHideTimer();
+      
+        // Load clothing items from product service
+        loadClothingItems();
+
+        // Check if tutorial should be shown
+        checkTutorialStatus();
       } catch (error) {
         Alert.alert('Error', `Camera initialization failed: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -137,6 +188,119 @@ export default function CameraScreen() {
 
   const handleCameraReady = () => {
     setCameraReady(true);
+    // Start frame processing when camera is ready and real-time pose is enabled
+    if (isARMode && arSettings.enableRealTimePose) {
+      startFrameProcessing();
+    }
+  };
+
+  // Function to start real-time frame processing
+  const startFrameProcessing = () => {
+    if (frameProcessingTimer.current) {
+      clearInterval(frameProcessingTimer.current);
+    }
+
+    frameProcessingTimer.current = setInterval(async () => {
+      if (!isProcessingFrame && cameraRef.current && isARMode && arSettings.enableRealTimePose) {
+        await processCameraFrame();
+      }
+    }, 150); // Process at ~6-7 FPS for optimal performance and accuracy balance
+  };
+
+  // Function to process camera frame for pose detection
+  const processCameraFrame = async () => {
+    if (isProcessingFrame) return;
+
+    console.log('🔍 DEBUG: processCameraFrame called');
+    setIsProcessingFrame(true);
+    const startTime = Date.now();
+
+    try {
+      console.log('🔍 DEBUG: Taking picture from camera...');
+      // Capture frame from camera (using takePictureAsync for processing)
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.3, // Lower quality for faster processing while maintaining accuracy
+        base64: false,
+        exif: false,
+      });
+      console.log('🔍 DEBUG: Photo captured, URI:', photo.uri);
+
+      console.log('🔍 DEBUG: Processing captured frame for pose detection...');
+      // Process the captured frame for pose detection
+      const poseResult = await detectBodyPose(photo.uri);
+      console.log('🔍 DEBUG: Pose detection completed, landmarks count:', Object.keys(poseResult.landmarks).length);
+
+      // Update pose state with smoothing to reduce jitter
+      setBodyPose((prevPose: any) => {
+        if (!prevPose) return poseResult;
+
+        // Simple smoothing: average with previous pose to reduce jitter
+        const smoothedLandmarks: BodyLandmarks = {
+          nose: { x: 0, y: 0 },
+          leftShoulder: { x: 0, y: 0 },
+          rightShoulder: { x: 0, y: 0 },
+          leftElbow: { x: 0, y: 0 },
+          rightElbow: { x: 0, y: 0 },
+          leftWrist: { x: 0, y: 0 },
+          rightWrist: { x: 0, y: 0 },
+          leftHip: { x: 0, y: 0 },
+          rightHip: { x: 0, y: 0 },
+          leftKnee: { x: 0, y: 0 },
+          rightKnee: { x: 0, y: 0 },
+          leftAnkle: { x: 0, y: 0 },
+          rightAnkle: { x: 0, y: 0 },
+        };
+        const smoothingFactor = 0.7; // Higher = more smoothing
+
+        (Object.keys(poseResult.landmarks) as Array<keyof BodyLandmarks>).forEach(key => {
+          const current = poseResult.landmarks[key];
+          const previous = prevPose.landmarks[key];
+          smoothedLandmarks[key] = {
+            x: previous.x * smoothingFactor + current.x * (1 - smoothingFactor),
+            y: previous.y * smoothingFactor + current.y * (1 - smoothingFactor),
+          };
+        });
+
+        return {
+          landmarks: smoothedLandmarks,
+          boundingBox: poseResult.boundingBox
+        };
+      });
+
+      // Update overlay if clothing is selected
+      if (selectedClothing) {
+        const imageDimensions = { width: 200, height: 300 }; // Placeholder dimensions
+        const overlay = await renderClothingOverlay(selectedClothing, poseResult, imageDimensions);
+        setClothingOverlay(overlay);
+      }
+
+      // Update performance metrics
+      const processingTime = Date.now() - startTime;
+      frameCount.current++;
+      const currentTime = Date.now();
+      const timeDiff = currentTime - lastFrameTime.current;
+
+      if (timeDiff >= 1000) { // Update FPS every second
+        const fps = Math.round((frameCount.current * 1000) / timeDiff);
+        setPerformanceMetrics({
+          fps,
+          processingTime,
+          lastFrameTime: currentTime,
+        });
+        frameCount.current = 0;
+        lastFrameTime.current = currentTime;
+      }
+
+    } catch (error) {
+      console.error('🔍 DEBUG: Error processing camera frame:', error);
+      console.error('🔍 DEBUG: Error type:', error instanceof Error ? error.constructor.name : typeof error);
+      console.error('🔍 DEBUG: Error message:', error instanceof Error ? error.message : String(error));
+      console.error('🔍 DEBUG: Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+      setPoseDetectionError('Failed to process camera frame');
+    } finally {
+      console.log('🔍 DEBUG: processCameraFrame completed');
+      setIsProcessingFrame(false);
+    }
   };
 
   const toggleControls = () => {
@@ -157,19 +321,53 @@ export default function CameraScreen() {
     });
   };
 
-  const selectClothingItem = (item: any) => {
+  const selectClothingItem = async (item: any) => {
     setSelectedClothing(item);
-    if (clothingModel) {
-      const material = new THREE.MeshBasicMaterial({ color: item.color });
-      clothingModel.material = material;
+    setIsLoading(true);
+    setIsLoadingPose(true);
+    setPoseDetectionError(null);
+
+    try {
+      // If real-time processing is not active, do a one-time pose detection
+      if (!isARMode || !frameProcessingTimer.current) {
+        const pose = await detectBodyPose();
+        setBodyPose(pose);
+
+        // Calculate overlay position based on body pose with improved positioning
+        const imageDimensions = { width: 200, height: 300 }; // Placeholder dimensions
+        const overlay = await renderClothingOverlay(item, pose, imageDimensions);
+        setClothingOverlay(overlay);
+      }
+      // If real-time processing is active, overlay will be updated automatically
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to apply clothing overlay';
+      setPoseDetectionError(errorMessage);
+      Alert.alert('Error', errorMessage);
+      console.error('Error selecting clothing item:', error);
+    } finally {
+      setIsLoading(false);
+      setIsLoadingPose(false);
     }
   };
 
   const toggleArSetting = (setting: string) => {
-    setArSettings({
+    const newSettings = {
       ...arSettings,
       [setting]: !arSettings[setting as keyof typeof arSettings]
-    });
+    };
+    setArSettings(newSettings);
+
+    // Handle real-time pose detection toggle
+    if (setting === 'enableRealTimePose') {
+      if (newSettings.enableRealTimePose && isARMode && cameraReady) {
+        startFrameProcessing();
+      } else {
+        if (frameProcessingTimer.current) {
+          clearInterval(frameProcessingTimer.current);
+          frameProcessingTimer.current = null;
+        }
+      }
+    }
   };
 
   // Animated styles with semi-transparency
@@ -208,52 +406,46 @@ export default function CameraScreen() {
     transform: [{ translateY: settingsPanelY.value }]
   }));
 
-  const setupARScene = (gl: any) => {
-    try {
-      const renderer = new THREE.WebGLRenderer({ context: gl });
-      renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
-      setArRenderer(renderer);
+  // Initialize body pose detection when AR mode is enabled
+  useEffect(() => {
+    console.log('🔍 DEBUG: AR initialization useEffect triggered');
+    console.log('🔍 DEBUG: isARMode:', isARMode, 'cameraReady:', cameraReady);
 
-      const newScene = new THREE.Scene();
-      setScene(newScene);
+    if (isARMode && cameraReady) {
+      const initializePoseDetection = async () => {
+        try {
+          console.log('🔍 DEBUG: Initializing AR pose detection...');
+          // Initialize ML pose detection
+          await initializeAR();
+          console.log('🔍 DEBUG: AR pose detection initialized successfully');
 
-      const newCamera = new THREE.PerspectiveCamera(
-        75,
-        gl.drawingBufferWidth / gl.drawingBufferHeight,
-        0.1,
-        1000
-      );
-      setCamera(newCamera);
-
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-      newScene.add(ambientLight);
-
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
-      directionalLight.position.set(0, 1, 0);
-      newScene.add(directionalLight);
-
-      const geometry = new THREE.BoxGeometry(1, 1, 1);
-      const material = new THREE.MeshBasicMaterial({ color: theme.colors.primary });
-      const cube = new THREE.Mesh(geometry, material);
-      newScene.add(cube);
-      setClothingModel(cube);
-
-      const animate = () => {
-        requestAnimationFrame(animate);
-
-        if (cube) {
-          cube.rotation.x += 0.01;
-          cube.rotation.y += 0.01;
+          // Start frame processing if real-time pose is enabled
+          if (arSettings.enableRealTimePose) {
+            console.log('🔍 DEBUG: Starting frame processing...');
+            startFrameProcessing();
+          }
+        } catch (error) {
+          console.error('🔍 DEBUG: Error initializing pose detection:', error);
+          console.error('🔍 DEBUG: Error details:', error instanceof Error ? error.message : String(error));
         }
-
-        renderer.render(newScene, newCamera);
       };
-
-      animate();
-    } catch (error) {
-      Alert.alert('AR Error', `Failed to setup AR: ${error instanceof Error ? error.message : String(error)}`);
+      initializePoseDetection();
+    } else {
+      console.log('🔍 DEBUG: Stopping frame processing (AR mode disabled or camera not ready)');
+      // Stop frame processing when AR mode is disabled or real-time pose is disabled
+      if (frameProcessingTimer.current) {
+        clearInterval(frameProcessingTimer.current);
+        frameProcessingTimer.current = null;
+      }
     }
-  };
+
+    return () => {
+      console.log('🔍 DEBUG: Cleanup: clearing frame processing timer');
+      if (frameProcessingTimer.current) {
+        clearInterval(frameProcessingTimer.current);
+      }
+    };
+  }, [isARMode, cameraReady, arSettings.enableRealTimePose]);
 
   if (hasPermission === null) {
     return (
@@ -297,12 +489,57 @@ export default function CameraScreen() {
         onCameraReady={handleCameraReady}
         ratio="4:3"
       >
-        {isARMode && cameraReady && (
-          <GLView
-            ref={glViewRef}
-            style={styles.arView}
-            onContextCreate={(gl) => setupARScene(gl)}
-          />
+        {isARMode && cameraReady && clothingOverlay && (
+          <Animated.View
+            style={[
+              styles.clothingOverlay,
+              {
+                left: clothingOverlay.position.x,
+                top: clothingOverlay.position.y,
+                width: 200 * clothingOverlay.scale,
+                height: 300 * clothingOverlay.scale,
+                transform: [
+                  { rotate: `${clothingOverlay.rotation}deg` }
+                ],
+                opacity: clothingOverlay.opacity,
+              }
+            ]}
+          >
+            <Image
+              source={{ uri: clothingOverlay.imageUri }}
+              style={styles.overlayImage}
+              resizeMode="contain"
+            />
+          </Animated.View>
+        )}
+
+        {/* Body pose landmarks visualization */}
+        {isARMode && arSettings.showLandmarks && bodyPose && (
+          <View style={styles.landmarksContainer}>
+            {Object.entries(bodyPose.landmarks).map(([key, landmark]: [string, any]) => (
+              <View
+                key={key}
+                style={[
+                  styles.landmark,
+                  { left: landmark.x - 3, top: landmark.y - 3 }
+                ]}
+              />
+            ))}
+          </View>
+        )}
+
+        {/* Performance metrics overlay */}
+        {isARMode && arSettings.showLandmarks && (
+          <View style={styles.performanceOverlay}>
+            <Text style={styles.performanceText}>
+              FPS: {performanceMetrics.fps} | Processing: {performanceMetrics.processingTime}ms
+            </Text>
+            {poseDetectionError && (
+              <Text style={[styles.performanceText, { color: 'red' }]}>
+                Error: {poseDetectionError}
+              </Text>
+            )}
+          </View>
         )}
 
         {/* Touch overlay to toggle controls */}
@@ -412,12 +649,26 @@ export default function CameraScreen() {
                   ]}
                   onPress={() => selectClothingItem(item)}
                 >
-                  <View style={[styles.colorDot, { backgroundColor: item.color }]} />
+                  {item.images && item.images.length > 0 ? (
+                    <Image
+                      source={{ uri: item.images[0] }}
+                      style={styles.clothingImage}
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <View style={[styles.colorDot, { backgroundColor: theme.colors.primary }]} />
+                  )}
                   <Text style={[
-                    styles.clothingChipText, 
+                    styles.clothingChipText,
                     { color: selectedClothing?.id === item.id ? theme.colors.surface : theme.colors.onSurface }
                   ]}>
                     {item.name}
+                  </Text>
+                  <Text style={[
+                    styles.priceText,
+                    { color: selectedClothing?.id === item.id ? theme.colors.surface : theme.colors.onSurfaceVariant }
+                  ]}>
+                    ${item.price}
                   </Text>
                 </TouchableOpacity>
               ))}
@@ -452,6 +703,18 @@ export default function CameraScreen() {
                     color={theme.colors.primary}
                   />
                 </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.optionRow}
+                  onPress={() => toggleArSetting('enableRealTimePose')}
+                >
+                  <Text style={[styles.optionText, { color: theme.colors.onSurface }]}>Real-time Pose Detection</Text>
+                  <Ionicons
+                    name={arSettings.enableRealTimePose ? 'checkbox' : 'square-outline'}
+                    size={rf(24)}
+                    color={theme.colors.primary}
+                  />
+                </TouchableOpacity>
               </View>
             </View>
           )}
@@ -464,6 +727,22 @@ export default function CameraScreen() {
           <Text style={[styles.loadingText, { color: theme.colors.surface }]}>Loading camera...</Text>
         </View>
       )}
+
+      {/* Pose Detection Loading */}
+      {isLoadingPose && (
+        <View style={[styles.loadingContainer, { backgroundColor: theme.colors.backdrop }]}>
+          <Text style={[styles.loadingText, { color: theme.colors.surface }]}>
+            Detecting body pose...
+          </Text>
+        </View>
+      )}
+
+      {/* Virtual Try-On Tutorial */}
+      <VirtualTryOnTutorial
+        visible={showTutorial}
+        onComplete={() => setShowTutorial(false)}
+        onSkip={() => setShowTutorial(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -487,12 +766,33 @@ const styles = StyleSheet.create({
   camera: {
     flex: 1,
   },
-  arView: {
+  clothingOverlay: {
+    position: 'absolute',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  overlayImage: {
+    width: '100%',
+    height: '100%',
+  },
+  landmarksContainer: {
     position: 'absolute',
     top: 0,
     left: 0,
     width: '100%',
     height: '100%',
+  },
+  landmark: {
+    position: 'absolute',
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'red',
+    borderWidth: 1,
+    borderColor: 'white',
   },
   touchOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -638,6 +938,17 @@ const styles = StyleSheet.create({
     fontSize: rf(14),
     fontWeight: '500',
   },
+  clothingImage: {
+    width: rw(40),
+    height: rw(40),
+    borderRadius: rw(6),
+    marginBottom: hp(0.5),
+  },
+  priceText: {
+    fontSize: rf(12),
+    fontWeight: '400',
+    marginTop: hp(0.2),
+  },
   arOptions: {
     borderRadius: rw(12),
     padding: wp(3),
@@ -667,5 +978,19 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     fontSize: rf(18),
+  },
+  performanceOverlay: {
+    position: 'absolute',
+    top: hp(2),
+    right: wp(2),
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    paddingHorizontal: wp(2),
+    paddingVertical: hp(0.5),
+    borderRadius: rw(8),
+  },
+  performanceText: {
+    color: 'white',
+    fontSize: rf(10),
+    fontWeight: '500',
   },
 });

@@ -187,10 +187,10 @@ export default function AddressStep({ data, locations, onUpdate, onNext, onPrev 
 
       <View style={styles.buttonContainer}>
         <Button mode="outlined" onPress={onPrev} style={styles.backButton}>
-          Back
+          Back to Basic Info
         </Button>
-        <Button mode="contained" onPress={handleNext} style={styles.nextButton}>
-          Next
+        <Button mode="contained" onPress={handleNext} style={styles.completeButton}>
+          Complete Registration
         </Button>
       </View>
     </View>
@@ -222,16 +222,13 @@ const styles = StyleSheet.create({
     color: '#333',
   },
   buttonContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
     marginTop: wp(6),
   },
   backButton: {
-    flex: 1,
-    marginRight: wp(2),
+    width: '100%',
+    marginBottom: wp(2),
   },
-  nextButton: {
-    flex: 1,
-    marginLeft: wp(2),
+  completeButton: {
+    width: '100%',
   },
 });

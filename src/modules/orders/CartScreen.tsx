@@ -12,7 +12,7 @@ export default function CartScreen({ navigation }: any) {
   const { items, remove, updateQty, total, clear } = useContext(CartContext);
   const { user } = useContext(AuthContext);
   
-  const isGuest = user?.isGuest || false;
+  const isGuest = user?.id === 'guest';
 
   const handleCheckout = () => {
     if (isGuest) {

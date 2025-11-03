@@ -48,8 +48,17 @@ export default function LoginScreen() {
             onChangeText={setPassword}
             style={styles.input}
           />
-          
-          <Button 
+
+          <Button
+            mode="text"
+            onPress={() => nav.navigate('PasswordReset')}
+            style={styles.forgotPasswordButton}
+            disabled={loading}
+          >
+            Forgot Password?
+          </Button>
+
+          <Button
             mode="contained" 
             onPress={onLogin} 
             loading={loading} 
@@ -123,6 +132,10 @@ const styles = StyleSheet.create({
   },
   input: {
     marginBottom: wp(4)
+  },
+  forgotPasswordButton: {
+    alignSelf: 'flex-end',
+    marginBottom: wp(2),
   },
   button: {
     marginTop: wp(3),

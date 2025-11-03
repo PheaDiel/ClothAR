@@ -12,6 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { AuthContext } from '../../context/AuthContext';
 import { Measurement } from '../../types';
+import { MeasurementService } from '../../services/measurementService';
 
 type BodyMeasurementFormProps = {
   navigation: NativeStackNavigationProp<any>;
@@ -74,7 +75,7 @@ export default function BodyMeasurementForm({ navigation, route, isOnboarding = 
   };
 
   const handleSave = async () => {
-    if (user?.isGuest) {
+    if (user?.id === 'guest') {
       Alert.alert(
         'Account Required',
         'Please create an account to save measurements.',
@@ -92,8 +93,7 @@ export default function BodyMeasurementForm({ navigation, route, isOnboarding = 
 
     setLoading(true);
     try {
-      const measurementData: Omit<Measurement, '_id' | 'createdAt' | 'updatedAt'> = {
-        userId: user?.id || '',
+      const measurementData = {
         name: formData.name.trim(),
         measurements: Object.fromEntries(
           Object.entries(formData.measurements)
@@ -104,7 +104,16 @@ export default function BodyMeasurementForm({ navigation, route, isOnboarding = 
         isDefault: formData.isDefault,
       };
 
-      // TODO: Replace with actual API call
+      let result;
+      if (existingMeasurement) {
+        result = await MeasurementService.updateMeasurement(existingMeasurement._id!, measurementData);
+      } else {
+        result = await MeasurementService.createMeasurement(measurementData);
+      }
+
+      if (!result.success) {
+        throw new Error(result.error);
+      }
 
       Alert.alert(
         'Success',
@@ -116,8 +125,8 @@ export default function BodyMeasurementForm({ navigation, route, isOnboarding = 
           // In onboarding mode, don't navigate - let the parent component handle completion
         } }]
       );
-    } catch (error) {
-      Alert.alert('Error', 'Failed to save measurements. Please try again.');
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'Failed to save measurements. Please try again.');
     } finally {
       setLoading(false);
     }

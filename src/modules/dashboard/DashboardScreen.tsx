@@ -21,7 +21,7 @@ export default function DashboardScreen({ navigation }: { navigation: any }) {
    const [category, setCategory] = useState<string | null>(null);
    const [businessLocation, setBusinessLocation] = useState<{ latitude: number; longitude: number; address: string; name: string } | null>(null);
 
-   const isGuest = user?.isGuest || false;
+   const isGuest = user?.id === 'guest';
 
    useEffect(() => {
      const fetchLocation = async () => {
