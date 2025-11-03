@@ -47,23 +47,46 @@ export interface FabricType {
 
 export class ProductService {
   /**
-   * Get all active products with variants (optimized)
+   * Get all active products with variants (optimized with pagination)
    */
-  static async getProducts(category?: string, limit = 50): Promise<{ success: boolean; products?: Product[]; error?: string }> {
+  static async getProducts(
+    category?: string,
+    limit = 50,
+    offset = 0,
+    search?: string,
+    sortBy: 'created_at' | 'name' | 'base_price' = 'created_at',
+    sortOrder: 'asc' | 'desc' = 'desc'
+  ): Promise<{ success: boolean; products?: Product[]; totalCount?: number; hasMore?: boolean; error?: string }> {
     try {
+      // Check cache first
+      const cacheService = (await import('./cacheService')).default.getInstance();
+      const cacheKey = `products_${category || 'all'}_${limit}_${offset}_${search || ''}_${sortBy}_${sortOrder}`;
+      const cachedData = await cacheService.get<any>(cacheKey);
+
+      if (cachedData) {
+        return cachedData;
+      }
+
       // Use optimized function for better performance
       const { data: products, error } = await supabase
         .rpc('get_products_paginated', {
           p_category: category,
+          p_search: search || null,
           p_limit: limit,
-          p_offset: 0
+          p_offset: offset
         });
 
       if (error) {
         // Fallback to original query if RPC fails
         console.warn('RPC failed, using fallback query:', error);
-        return this.getProductsFallback(category, limit);
+        return this.getProductsFallback(category, limit, offset, search, sortBy, sortOrder);
       }
+
+      // Get total count for pagination
+      const { count } = await supabase
+        .from('products')
+        .select('*', { count: 'exact', head: true })
+        .eq('is_active', true);
 
       // Transform the data to match expected format
       const transformedProducts = products?.map((product: any) => ({
@@ -90,7 +113,17 @@ export class ProductService {
         available_colors: product.available_colors
       })) || [];
 
-      return { success: true, products: transformedProducts };
+      const result = {
+        success: true,
+        products: transformedProducts,
+        totalCount: count || 0,
+        hasMore: (offset + limit) < (count || 0)
+      };
+
+      // Cache the result
+      await cacheService.set(cacheKey, result, { ttl: 10 * 60 * 1000 }); // 10 minutes
+
+      return result;
     } catch (error: any) {
       console.error('Get products error:', error);
       return { success: false, error: error.message };
@@ -100,7 +133,14 @@ export class ProductService {
   /**
    * Fallback method for getProducts when optimized RPC is not available
    */
-  private static async getProductsFallback(category?: string, limit = 50): Promise<{ success: boolean; products?: Product[]; error?: string }> {
+  private static async getProductsFallback(
+    category?: string,
+    limit = 50,
+    offset = 0,
+    search?: string,
+    sortBy: 'created_at' | 'name' | 'base_price' = 'created_at',
+    sortOrder: 'asc' | 'desc' = 'desc'
+  ): Promise<{ success: boolean; products?: Product[]; totalCount?: number; hasMore?: boolean; error?: string }> {
     try {
       let query = supabase
         .from('products')
@@ -116,20 +156,31 @@ export class ProductService {
             stock_quantity,
             is_available
           )
-        `)
-        .eq('is_active', true)
-        .order('created_at', { ascending: false })
-        .limit(limit);
+        `, { count: 'exact' })
+        .eq('is_active', true);
 
       if (category) {
         query = query.eq('category', category);
       }
 
-      const { data: products, error } = await query;
+      if (search) {
+        query = query.or(`name.ilike.%${search}%,description.ilike.%${search}%,category.ilike.%${search}%`);
+      }
+
+      query = query
+        .order(sortBy, { ascending: sortOrder === 'asc' })
+        .range(offset, offset + limit - 1);
+
+      const { data: products, error, count } = await query;
 
       if (error) throw error;
 
-      return { success: true, products };
+      return {
+        success: true,
+        products,
+        totalCount: count || 0,
+        hasMore: (offset + limit) < (count || 0)
+      };
     } catch (error: any) {
       console.error('Get products fallback error:', error);
       return { success: false, error: error.message };

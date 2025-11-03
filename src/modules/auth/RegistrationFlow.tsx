@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { View, StyleSheet, ScrollView, Alert } from 'react-native';
+import { View, StyleSheet, ScrollView } from 'react-native';
 import { Text, Button } from 'react-native-paper';
 import StepIndicator from 'react-native-step-indicator';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -8,6 +8,9 @@ import { AuthContext } from '../../context/AuthContext';
 import { RegistrationData, PhilippineLocations } from '../../types';
 import philippineLocations from '../../data/philippineLocations';
 import { wp, rf } from '../../utils/responsiveUtils';
+import { useToast } from '../../context/ToastContext';
+import { ValidationService } from '../../services/validationService';
+import { useAsyncOperation } from '../../hooks/useAsyncOperation';
 
 // Import step components (will create them next)
 import BasicInfoStep from './steps/BasicInfoStep.tsx';
@@ -41,22 +44,23 @@ const stepIndicatorStyles = {
 };
 
 export default function RegistrationFlow() {
-   const [currentStep, setCurrentStep] = useState(0);
-   // Set default province to Albay
-   const defaultProvince = philippineLocations.provinces.find(p => p.name === 'ALBAY') || null;
-   const [registrationData, setRegistrationData] = useState<RegistrationData>({
-     name: '',
-     email: '',
-     password: '',
-     phone: '',
-     province: defaultProvince,
-     city: null,
-     barangay: null,
-     role_request: null,
-   });
-  const [loading, setLoading] = useState(false);
-  const { register, updateProfile } = useContext(AuthContext);
-  const navigation = useNavigation();
+    const [currentStep, setCurrentStep] = useState(0);
+    // Set default province to Albay
+    const defaultProvince = philippineLocations.provinces.find(p => p.name === 'ALBAY') || null;
+    const [registrationData, setRegistrationData] = useState<RegistrationData>({
+      name: '',
+      email: '',
+      password: '',
+      phone: '',
+      province: defaultProvince,
+      city: null,
+      barangay: null,
+      role_request: null,
+    });
+   const { register, updateProfile } = useContext(AuthContext);
+   const navigation = useNavigation();
+   const { showSuccess, showError } = useToast();
+   const executeAsync = useAsyncOperation();
 
   // Load saved progress on mount
   useEffect(() => {
@@ -118,21 +122,35 @@ export default function RegistrationFlow() {
   };
 
   const handleComplete = async () => {
-    setLoading(true);
-    try {
-      // Role is now automatically set to 'customer' in BasicInfoStep, no need to validate
+    const success = await executeAsync.execute(
+      async () => {
+        // First validate data on server
+        const validationResult = await ValidationService.validateRegistration({
+          name: registrationData.name,
+          email: registrationData.email,
+          phone: registrationData.phone,
+          password: registrationData.password,
+        });
 
-      const success = await register(
-        registrationData.name,
-        registrationData.email,
-        registrationData.password,
-        registrationData.phone,
-        registrationData.role_request || 'customer' // Fallback to customer if not set
-      );
+        if (!validationResult.isValid) {
+          throw new Error(validationResult.errors.join('\n'));
+        }
 
-      if (success) {
+        // Proceed with registration
+        const registerSuccess = await register(
+          registrationData.name,
+          registrationData.email,
+          registrationData.password,
+          registrationData.phone,
+          registrationData.role_request || 'customer'
+        );
+
+        if (!registerSuccess) {
+          throw new Error('Registration failed');
+        }
+
         // Update profile with address and measurements
-        await updateProfile({
+        const profileSuccess = await updateProfile({
           province_code: registrationData.province?.code,
           province_name: registrationData.province?.name,
           city_code: registrationData.city?.code,
@@ -141,43 +159,34 @@ export default function RegistrationFlow() {
           profileComplete: true,
         });
 
-        await clearProgress();
+        if (!profileSuccess) {
+          console.warn('Profile update failed, but registration succeeded');
+        }
 
-        // Clear registration data from state to prevent persistence
-        setRegistrationData({
-          name: '',
-          email: '',
-          password: '',
-          phone: '',
-          province: defaultProvince,
-          city: null,
-          barangay: null,
-          role_request: null,
-        });
-        setCurrentStep(0);
+        return registerSuccess;
+      },
+      {
+        showSuccessToast: true,
+        successMessage: 'Registration successful! Welcome to ClothAR.',
+        errorMessage: 'Registration failed. Please try again.',
+        onSuccess: async () => {
+          await clearProgress();
 
-        // Show success message
-        Alert.alert(
-          'Registration Successful!',
-          'Your account has been created. You will now be redirected to the dashboard.',
-          [
-            {
-              text: 'OK',
-              onPress: () => {
-                // Navigation will happen automatically when user state updates
-                // The RootNavigation component will detect the user is logged in
-                // and navigate to the appropriate screen
-              }
-            }
-          ]
-        );
+          // Clear registration data from state to prevent persistence
+          setRegistrationData({
+            name: '',
+            email: '',
+            password: '',
+            phone: '',
+            province: defaultProvince,
+            city: null,
+            barangay: null,
+            role_request: null,
+          });
+          setCurrentStep(0);
+        }
       }
-    } catch (error: any) {
-      console.error('Registration error:', error);
-      Alert.alert('Registration Failed', error.message || 'Please try again.');
-    } finally {
-      setLoading(false);
-    }
+    );
   };
 
   const renderStep = () => {

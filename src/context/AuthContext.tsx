@@ -1,10 +1,10 @@
 import React, { createContext, useState, useEffect, ReactNode } from 'react';
 import { User, Profile } from '../types';
 import { load, save } from '../services/storage';
-import { Alert } from 'react-native';
 import { supabase } from '../services/supabase';
 import { ProfileService } from '../services/profileService';
 import { SecureAuth, SecurityService } from '../services/securityService';
+import { useToast } from './ToastContext';
 
 type AuthContextType = {
    user: User | null;
@@ -29,6 +29,7 @@ export const AuthContext = createContext<AuthContextType>({
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const { showError } = useToast();
 
   useEffect(() => {
     (async () => {
@@ -158,11 +159,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
       // Handle specific security-related errors
       if (error.message?.includes('temporarily locked')) {
-        Alert.alert('Account Locked', error.message);
+        showError('Account Locked: ' + error.message);
       } else if (error.message?.includes('rate limited')) {
-        Alert.alert('Too Many Attempts', 'Please wait before trying again.');
+        showError('Too Many Attempts', 5000, {
+          label: 'Try Again',
+          onPress: () => login(email, password)
+        });
       } else {
-        Alert.alert('Login Failed', error.message || 'Please check your credentials.');
+        showError(error.message || 'Please check your credentials.');
       }
       return false;
     }
@@ -247,9 +251,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
       // Handle password policy errors specifically
       if (error.message?.includes('Password validation failed')) {
-        Alert.alert('Password Requirements', error.message);
+        showError('Password Requirements: ' + error.message);
       } else {
-        Alert.alert('Registration Failed', error.message || 'Please try again.');
+        showError(error.message || 'Please try again.');
       }
       return false;
     }
@@ -261,7 +265,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     try {
       const result = await ProfileService.updateProfile(updates);
       if (!result.success) {
-        Alert.alert('Update Failed', result.error || 'Please try again.');
+        showError(result.error || 'Please try again.');
         return false;
       }
 
@@ -270,7 +274,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setUser(updatedUser);
       return true;
     } catch (error: any) {
-      Alert.alert('Update Failed', error.message || 'Please try again.');
+      showError(error.message || 'Please try again.');
       return false;
     }
   };

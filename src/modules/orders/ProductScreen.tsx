@@ -1,6 +1,11 @@
 import React, { useState, useContext, useEffect } from 'react';
-import { View, ScrollView, StyleSheet, Alert, Modal, TouchableOpacity } from 'react-native';
+import { View, ScrollView, StyleSheet, Modal, TouchableOpacity } from 'react-native';
 import LazyImage from '../../components/LazyImage';
+import { useToast } from '../../context/ToastContext';
+import { useNetwork } from '../../context/NetworkContext';
+import { useAsyncOperation } from '../../hooks/useAsyncOperation';
+import ErrorBoundary from '../../components/ErrorBoundary';
+import { SkeletonLoader } from '../../components/SkeletonLoader';
 import { Text, Button, RadioButton, TextInput, ActivityIndicator, Portal, IconButton, Chip } from 'react-native-paper';
 import AppHeader from '../../components/AppHeader';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
@@ -24,6 +29,9 @@ export default function ProductScreen() {
    const item = route.params.item;
    const { add } = useContext(CartContext);
    const { user } = useContext(AuthContext);
+   const { showToast, showError, showSuccess, showInfo } = useToast();
+   const { isConnected, isInternetReachable } = useNetwork();
+   const executeAsync = useAsyncOperation();
 
    // State for selected product variant
    const [selectedVariant, setSelectedVariant] = useState<any>(null);
@@ -71,12 +79,12 @@ export default function ProductScreen() {
             }
           } else {
             setMeasurementError(true);
-            Alert.alert('Error', measurementResult.error || 'Failed to load measurements. You can still create new measurements.');
+            showError(measurementResult.error || 'Failed to load measurements. You can still create new measurements.');
           }
           setMeasurementError(false);
         } catch (error) {
           setMeasurementError(true);
-          Alert.alert('Error', 'Failed to load measurements. You can still create new measurements.');
+          showError('Failed to load measurements. You can still create new measurements.');
         }
       }
 
@@ -121,19 +129,13 @@ export default function ProductScreen() {
 
   const onAdd = async () => {
     if (isGuest) {
-      Alert.alert(
-        "Guest Access Limitation",
+      showInfo(
         "As a guest, you cannot add items to the pre-order cart. Please create an account to unlock full functionality.",
-        [
-          {
-            text: "Cancel",
-            style: "cancel"
-          },
-          {
-            text: "Create Account",
-            onPress: () => navigation.navigate('Register' as never)
-          }
-        ]
+        6000,
+        {
+          label: "Create Account",
+          onPress: () => navigation.navigate('Register' as never)
+        }
       );
       return;
     }
@@ -146,19 +148,19 @@ export default function ProductScreen() {
       measurementName = 'Default Measurements';
     } else if (measurementOption === 'named') {
       if (!selectedMeasurement) {
-        Alert.alert('Error', 'Please select a measurement profile');
+        showError('Please select a measurement profile');
         return;
       }
       const selectedMeasurementData = measurements.find(m => (m.id || m._id) === selectedMeasurement);
       if (!selectedMeasurementData) {
-        Alert.alert('Error', 'Selected measurement not found');
+        showError('Selected measurement not found');
         return;
       }
       measurementId = selectedMeasurement;
       measurementName = selectedMeasurementData.name;
     } else if (measurementOption === 'new') {
       if (!selectedMeasurement || !measurements.find(m => m._id === selectedMeasurement)) {
-        Alert.alert('Error', 'Please create new measurements first');
+        showError('Please create new measurements first');
         return;
       }
       const newMeasurementData = measurements.find(m => (m.id || m._id) === selectedMeasurement);
@@ -209,19 +211,13 @@ export default function ProductScreen() {
       }
     }
 
-    Alert.alert(
-      "Added to Pre-order Cart",
+    showSuccess(
       `${item.name} has been added to your pre-order cart.${materialFee > 0 ? ` Material fee: ₱${materialFee}` : ''}`,
-      [
-        {
-          text: "Continue Shopping",
-          style: "cancel"
-        },
-        {
-          text: "View Pre-order Cart",
-          onPress: () => navigation.navigate('Cart' as never)
-        }
-      ]
+      4000,
+      {
+        label: "View Cart",
+        onPress: () => navigation.navigate('Cart' as never)
+      }
     );
   };
 
@@ -231,50 +227,56 @@ export default function ProductScreen() {
 
   const handleSaveNewMeasurement = async () => {
     if (!newMeasurementForm.name.trim()) {
-      Alert.alert('Error', 'Please enter a name for your measurements');
+      showError('Please enter a name for your measurements');
       return;
     }
 
     const hasMeasurements = Object.values(newMeasurementForm.measurements).some(val => val.trim() !== '');
     if (!hasMeasurements) {
-      Alert.alert('Error', 'Please enter at least one measurement');
+      showError('Please enter at least one measurement');
       return;
     }
 
     setSavingNewMeasurement(true);
-    try {
-      // Create new measurement via service
-      const result = await MeasurementService.createMeasurement({
-        name: newMeasurementForm.name.trim(),
-        measurements: Object.fromEntries(
-          Object.entries(newMeasurementForm.measurements)
-            .map(([key, value]) => [key, value.trim() ? parseFloat(value) : undefined])
-            .filter(([, value]) => value !== undefined)
-        ),
-        isDefault: false,
-      });
 
-      if (!result.success || !result.measurement) {
-        throw new Error(result.error || 'Failed to create measurement');
+    const success = await executeAsync.execute(
+      async () => {
+        const result = await MeasurementService.createMeasurement({
+          name: newMeasurementForm.name.trim(),
+          measurements: Object.fromEntries(
+            Object.entries(newMeasurementForm.measurements)
+              .map(([key, value]) => [key, value.trim() ? parseFloat(value) : undefined])
+              .filter(([, value]) => value !== undefined)
+          ),
+          isDefault: false,
+        });
+
+        if (!result.success || !result.measurement) {
+          throw new Error(result.error || 'Failed to create measurement');
+        }
+
+        return result.measurement;
+      },
+      {
+        showSuccessToast: true,
+        successMessage: 'New measurements added successfully!',
+        errorMessage: 'Failed to save measurements. Please try again.',
+        onSuccess: (measurement) => {
+          // Add to local measurements list
+          setMeasurements(prev => [...prev, measurement]);
+          setSelectedMeasurement(measurement.id || measurement._id || '');
+
+          // Reset form and close modal
+          setNewMeasurementForm({
+            name: '',
+            measurements: { bust: '', waist: '', hip: '', inseam: '' }
+          });
+          setShowNewMeasurementModal(false);
+        }
       }
+    );
 
-      // Add to local measurements list
-      setMeasurements(prev => [...prev, result.measurement!]);
-      setSelectedMeasurement(result.measurement.id || result.measurement._id || '');
-
-      // Reset form and close modal
-      setNewMeasurementForm({
-        name: '',
-        measurements: { bust: '', waist: '', hip: '', inseam: '' }
-      });
-      setShowNewMeasurementModal(false);
-
-      Alert.alert('Success', 'New measurements added successfully!');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to save measurements. Please try again.');
-    } finally {
-      setSavingNewMeasurement(false);
-    }
+    setSavingNewMeasurement(false);
   };
 
   const updateNewMeasurement = (key: string, value: string) => {
@@ -288,9 +290,10 @@ export default function ProductScreen() {
   };
 
   return (
-    <View style={styles.container}>
-      <AppHeader title="" />
-      <ScrollView contentContainerStyle={styles.scrollContainer}>
+    <ErrorBoundary>
+      <View style={styles.container}>
+        <AppHeader title="" />
+        <ScrollView contentContainerStyle={styles.scrollContainer}>
         <LazyImage
           source={typeof item.images?.[0] === 'string' ? { uri: item.images[0] } : { uri: 'https://via.placeholder.com/300x400.png?text=No+Image' }}
           style={styles.image}
@@ -650,6 +653,7 @@ export default function ProductScreen() {
         </View>
       </Modal>
     </View>
+    </ErrorBoundary>
   );
 }
 

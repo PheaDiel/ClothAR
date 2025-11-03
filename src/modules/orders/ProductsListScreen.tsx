@@ -15,27 +15,55 @@ import { hp, wp, rf } from '../../utils/responsiveUtils';
 import Loading from '../../components/Loading';
 import { ProductService } from '../../services/productService';
 import { Item } from '../../types';
+import CacheService from '../../services/cacheService';
 
 const ProductsListScreen = React.memo(function ProductsListScreen() {
   const navigation = useNavigation();
   const [products, setProducts] = useState<Item[]>([]);
   const [filteredProducts, setFilteredProducts] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [categories, setCategories] = useState<string[]>([]);
+  const [currentPage, setCurrentPage] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+  const [totalCount, setTotalCount] = useState(0);
+
+  const ITEMS_PER_PAGE = 20;
 
   useEffect(() => {
     loadProducts();
   }, []);
 
   useEffect(() => {
-    filterProducts();
-  }, [products, searchQuery, selectedCategory]);
+    // Reset pagination when filters change
+    setCurrentPage(0);
+    setProducts([]);
+    loadProducts(true);
+  }, [searchQuery, selectedCategory]);
 
-  const loadProducts = async () => {
+  const loadProducts = async (reset = false) => {
     try {
-      const result = await ProductService.getProducts();
+      const page = reset ? 0 : currentPage;
+      const offset = page * ITEMS_PER_PAGE;
+
+      if (reset) {
+        setLoading(true);
+      } else {
+        setLoadingMore(true);
+      }
+
+      const category = selectedCategory === 'all' ? undefined : selectedCategory;
+      const search = searchQuery.trim() || undefined;
+
+      const result = await ProductService.getProducts(
+        category,
+        ITEMS_PER_PAGE,
+        offset,
+        search
+      );
+
       if (result.success) {
         // Transform database products to Item interface
         const transformedProducts: Item[] = (result.products || []).map((product: any) => ({
@@ -44,21 +72,30 @@ const ProductsListScreen = React.memo(function ProductsListScreen() {
           price: product.base_price,
           images: product.images || [],
           category: product.category,
-          sizes: product.product_variants?.map((v: any) => v.size).filter(Boolean) || [],
-          stock: product.product_variants?.reduce((acc: any, v: any) => {
-            if (v.size) {
-              acc[v.size] = v.stock_quantity;
-            }
+          sizes: product.available_sizes || [],
+          stock: product.available_sizes?.reduce((acc: any, size: string) => {
+            // Simplified stock calculation - you might want to enhance this
+            acc[size] = product.total_stock || 0;
             return acc;
           }, {} as Record<string, number>) || {},
           description: product.description,
         }));
 
-        setProducts(transformedProducts);
+        if (reset) {
+          setProducts(transformedProducts);
+          setCurrentPage(0);
+        } else {
+          setProducts(prev => [...prev, ...transformedProducts]);
+        }
 
-        // Extract unique categories
-        const uniqueCategories = [...new Set(transformedProducts.map(p => p.category))];
-        setCategories(uniqueCategories);
+        setHasMore(result.hasMore || false);
+        setTotalCount(result.totalCount || 0);
+
+        // Extract unique categories (only on first load)
+        if (reset && transformedProducts.length > 0) {
+          const uniqueCategories = [...new Set(transformedProducts.map(p => p.category))];
+          setCategories(uniqueCategories);
+        }
       } else {
         Alert.alert('Error', result.error || 'Failed to load products');
       }
@@ -67,27 +104,18 @@ const ProductsListScreen = React.memo(function ProductsListScreen() {
       Alert.alert('Error', 'Failed to load products');
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   };
 
-  const filterProducts = useCallback(() => {
-    let filtered = products;
-
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(product =>
-        product.name.toLowerCase().includes(query) ||
-        product.description?.toLowerCase().includes(query) ||
-        product.category.toLowerCase().includes(query)
-      );
+  const loadMoreProducts = () => {
+    if (!loadingMore && hasMore) {
+      setCurrentPage(prev => prev + 1);
+      loadProducts();
     }
+  };
 
-    if (selectedCategory !== 'all') {
-      filtered = filtered.filter(product => product.category === selectedCategory);
-    }
-
-    setFilteredProducts(filtered);
-  }, [products, searchQuery, selectedCategory]);
+  // Remove filterProducts function as filtering is now done server-side
 
   const getTotalStock = useCallback((stock: Record<string, number>) => {
     return Object.values(stock).reduce((sum, qty) => sum + qty, 0);
@@ -210,22 +238,34 @@ const ProductsListScreen = React.memo(function ProductsListScreen() {
 
       {/* Products List */}
       <FlatList
-        data={filteredProducts}
+        data={products}
         renderItem={renderProductItem}
         keyExtractor={keyExtractor}
         contentContainerStyle={styles.productsList}
         showsVerticalScrollIndicator={false}
+        onEndReached={loadMoreProducts}
+        onEndReachedThreshold={0.5}
+        ListFooterComponent={
+          loadingMore ? (
+            <View style={styles.loadingMoreContainer}>
+              <Loading />
+              <Text style={styles.loadingMoreText}>Loading more products...</Text>
+            </View>
+          ) : null
+        }
         ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Ionicons name="storefront-outline" size={64} color={theme.colors.textLight} />
-            <Text style={styles.emptyText}>No products found</Text>
-            <Text style={styles.emptySubtext}>
-              {searchQuery || selectedCategory !== 'all'
-                ? 'Try adjusting your search or filters'
-                : 'Add products to start selling'
-              }
-            </Text>
-          </View>
+          !loading ? (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="storefront-outline" size={64} color={theme.colors.textLight} />
+              <Text style={styles.emptyText}>No products found</Text>
+              <Text style={styles.emptySubtext}>
+                {searchQuery || selectedCategory !== 'all'
+                  ? 'Try adjusting your search or filters'
+                  : 'Add products to start selling'
+                }
+              </Text>
+            </View>
+          ) : null
         }
       />
 
@@ -399,6 +439,15 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: hp(2),
     backgroundColor: theme.colors.primary,
+  },
+  loadingMoreContainer: {
+    paddingVertical: hp(2),
+    alignItems: 'center',
+  },
+  loadingMoreText: {
+    fontSize: rf(14),
+    color: theme.colors.textSecondary,
+    marginTop: hp(1),
   },
 });
 

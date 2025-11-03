@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
-import { View, StyleSheet, Alert, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { View, StyleSheet, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { TextInput, Button, HelperText, Text, Menu } from 'react-native-paper';
 import PasswordInput from '../../../components/PasswordInput';
 import { RegistrationData } from '../../../types';
 import { wp, rf } from '../../../utils/responsiveUtils';
+import { useRegistrationForm } from '../../../hooks/useFormValidation';
+import { useToast } from '../../../context/ToastContext';
 
 interface BasicInfoStepProps {
   data: RegistrationData;
@@ -12,8 +14,18 @@ interface BasicInfoStepProps {
 }
 
 export default function BasicInfoStep({ data, onUpdate, onNext }: BasicInfoStepProps) {
-    const [confirmPassword, setConfirmPassword] = useState('');
-     const [errors, setErrors] = useState<{[key: string]: string}>({});
+  const { showError } = useToast();
+
+  // Initialize form with existing data
+  const form = useRegistrationForm();
+
+  // Sync form data with parent component
+  React.useEffect(() => {
+    if (data.name) form.setFieldValue('name', data.name);
+    if (data.email) form.setFieldValue('email', data.email);
+    if (data.phone) form.setFieldValue('phone', data.phone);
+    if (data.password) form.setFieldValue('password', data.password);
+  }, [data]);
 
   // Set default role to customer on component mount
   React.useEffect(() => {
@@ -22,56 +34,30 @@ export default function BasicInfoStep({ data, onUpdate, onNext }: BasicInfoStepP
     }
   }, []);
 
-
-  const validateEmail = (email: string) => {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emailRegex.test(email);
+  const handleFieldChange = (fieldName: string, value: string) => {
+    form.setFieldValue(fieldName, value);
+    // Update parent component data
+    onUpdate({ [fieldName]: form.getFieldValue(fieldName) });
   };
 
-  const validatePassword = (password: string) => {
-    return password.length >= 8;
-  };
-
-  const validateForm = () => {
-    const newErrors: {[key: string]: string} = {};
-
-    if (!data.name.trim()) {
-      newErrors.name = 'Full name is required';
-    }
-
-    if (!data.email.trim()) {
-      newErrors.email = 'Email is required';
-    } else if (!validateEmail(data.email)) {
-      newErrors.email = 'Please enter a valid email address';
-    }
-
-    if (!data.password) {
-      newErrors.password = 'Password is required';
-    } else if (!validatePassword(data.password)) {
-      newErrors.password = 'Password must be at least 8 characters long';
-    }
-
-    if (!confirmPassword) {
-      newErrors.confirmPassword = 'Please confirm your password';
-    } else if (data.password !== confirmPassword) {
-      newErrors.confirmPassword = 'Passwords do not match';
-    }
-
-    if (!data.phone.trim()) {
-      newErrors.phone = 'Phone number is required';
-    } else if (!/^\+?[\d\s-()]{10,}$/.test(data.phone.replace(/\s/g, ''))) {
-      newErrors.phone = 'Please enter a valid phone number';
-    }
-
-    // Role is now automatically set to customer, no validation needed
-
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+  const handleConfirmPasswordChange = (value: string) => {
+    form.setFieldValue('confirmPassword', value);
   };
 
   const handleNext = () => {
-    if (validateForm()) {
+    // Validate password confirmation manually
+    const password = form.getFieldValue('password');
+    const confirmPassword = form.getFieldValue('confirmPassword');
+
+    if (password !== confirmPassword) {
+      showError('Passwords do not match');
+      return;
+    }
+
+    if (form.validateForm()) {
       onNext();
+    } else {
+      showError('Please correct the errors in the form');
     }
   };
 
@@ -92,87 +78,72 @@ export default function BasicInfoStep({ data, onUpdate, onNext }: BasicInfoStepP
 
       <TextInput
         label="Full Name"
-        value={data.name}
-        onChangeText={(value) => {
-          onUpdate({ name: value });
-          if (errors.name) setErrors(prev => ({ ...prev, name: '' }));
-        }}
+        value={form.fields.name.value}
+        onChangeText={(value) => handleFieldChange('name', value)}
         style={styles.input}
-        error={!!errors.name}
+        error={!!form.fields.name.error}
       />
-      <HelperText type="error" visible={!!errors.name}>
-        {errors.name}
+      <HelperText type="error" visible={!!form.fields.name.error}>
+        {form.fields.name.error}
       </HelperText>
 
       <TextInput
         label="Email"
-        value={data.email}
-        onChangeText={(value) => {
-          onUpdate({ email: value });
-          if (errors.email) setErrors(prev => ({ ...prev, email: '' }));
-        }}
+        value={form.fields.email.value}
+        onChangeText={(value) => handleFieldChange('email', value)}
         keyboardType="email-address"
         autoCapitalize="none"
         style={styles.input}
-        error={!!errors.email}
+        error={!!form.fields.email.error}
       />
-      <HelperText type="error" visible={!!errors.email}>
-        {errors.email}
+      <HelperText type="error" visible={!!form.fields.email.error}>
+        {form.fields.email.error}
       </HelperText>
 
       <PasswordInput
         label="Password"
-        value={data.password}
-        onChangeText={(value) => {
-          onUpdate({ password: value });
-          if (errors.password) setErrors(prev => ({ ...prev, password: '' }));
-        }}
+        value={form.fields.password.value}
+        onChangeText={(value) => handleFieldChange('password', value)}
         style={styles.input}
-        error={!!errors.password}
+        error={!!form.fields.password.error}
       />
-      <HelperText type="error" visible={!!errors.password}>
-        {errors.password}
+      <HelperText type="error" visible={!!form.fields.password.error}>
+        {form.fields.password.error}
       </HelperText>
 
       <PasswordInput
         label="Confirm Password"
-        value={confirmPassword}
-        onChangeText={(value) => {
-          setConfirmPassword(value);
-          if (errors.confirmPassword) setErrors(prev => ({ ...prev, confirmPassword: '' }));
-        }}
+        value={form.fields.confirmPassword.value}
+        onChangeText={handleConfirmPasswordChange}
         style={styles.input}
-        error={!!errors.confirmPassword}
+        error={!!form.fields.confirmPassword.error}
       />
-      <HelperText type="error" visible={!!errors.confirmPassword}>
-        {errors.confirmPassword}
+      <HelperText type="error" visible={!!form.fields.confirmPassword.error}>
+        {form.fields.confirmPassword.error}
       </HelperText>
 
       <TextInput
         label="Phone Number"
-        value={data.phone}
-        onChangeText={(value) => {
-          onUpdate({ phone: value });
-          if (errors.phone) setErrors(prev => ({ ...prev, phone: '' }));
-        }}
+        value={form.fields.phone.value}
+        onChangeText={(value) => handleFieldChange('phone', value)}
         keyboardType="phone-pad"
         style={styles.input}
-        error={!!errors.phone}
+        error={!!form.fields.phone.error}
       />
-      <HelperText type="error" visible={!!errors.phone}>
-        {errors.phone}
+      <HelperText type="error" visible={!!form.fields.phone.error}>
+        {form.fields.phone.error}
       </HelperText>
 
 
            <Button
-            mode="contained"
-            onPress={handleNext}
-            style={styles.nextButton}
-            contentStyle={styles.nextButtonContent}
-            disabled={!data.name || !data.email || !data.password || !confirmPassword || !data.phone}
-          >
-            Next
-          </Button>
+             mode="contained"
+             onPress={handleNext}
+             style={styles.nextButton}
+             contentStyle={styles.nextButtonContent}
+             disabled={!form.isValid}
+           >
+             Next
+           </Button>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>

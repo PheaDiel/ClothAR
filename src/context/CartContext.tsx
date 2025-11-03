@@ -3,6 +3,9 @@ import React, { createContext, ReactNode, useState, useEffect, useContext } from
 import { AuthContext } from './AuthContext';
 import { CartService } from '../services/cartService';
 import { supabase } from '../services/supabase';
+import { offlineStorage } from '../services/offlineStorage';
+import { useNetwork } from './NetworkContext';
+import { useToast } from './ToastContext';
 
 export type CartEntry = {
    itemId: string; // item id
@@ -47,6 +50,8 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
    const [items, setItems] = useState<CartEntry[]>([]);
    const [isOnline, setIsOnline] = useState(true);
    const { user } = useContext(AuthContext);
+   const { isConnected, isInternetReachable } = useNetwork();
+   const { showSuccess, showError, showInfo } = useToast();
 
   const add = (entry: CartEntry) => {
     // merge same item+measurement
@@ -58,9 +63,44 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
     } else {
       setItems((s) => [...s, entry]);
     }
+
+    // Save to offline storage
+    offlineStorage.saveCartOffline(items);
+
+    // Show success feedback
+    showSuccess(`${entry.name} added to cart`);
+
+    // Try to sync to database if online
+    if (isConnected && isInternetReachable !== false && user && user.id !== 'guest') {
+      syncToDatabase().catch(error => {
+        console.error('Failed to sync cart to database:', error);
+        // Add to pending operations for retry later
+        offlineStorage.addPendingOperation({
+          type: 'cart_sync',
+          data: { items: [...items, entry] }
+        });
+      });
+    }
   };
 
-  const remove = (index: number) => setItems((s) => s.filter((_, i) => i !== index));
+  const remove = (index: number) => {
+    const itemToRemove = items[index];
+    setItems((s) => s.filter((_, i) => i !== index));
+
+    // Save to offline storage
+    const updatedItems = items.filter((_, i) => i !== index);
+    offlineStorage.saveCartOffline(updatedItems);
+
+    // Show feedback
+    showInfo(`${itemToRemove?.name || 'Item'} removed from cart`);
+
+    // Try to sync to database if online
+    if (isConnected && isInternetReachable !== false && user && user.id !== 'guest') {
+      syncToDatabase().catch(error => {
+        console.error('Failed to sync cart to database:', error);
+      });
+    }
+  };
 
   const updateQty = (index: number, qty: number) => {
     setItems((s) => {
@@ -70,7 +110,22 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
     });
   };
 
-  const clear = () => setItems([]);
+  const clear = () => {
+    setItems([]);
+
+    // Clear offline storage
+    offlineStorage.clearCartOffline();
+
+    // Show feedback
+    showInfo('Cart cleared');
+
+    // Try to sync to database if online
+    if (isConnected && isInternetReachable !== false && user && user.id !== 'guest') {
+      syncToDatabase().catch(error => {
+        console.error('Failed to sync cart to database:', error);
+      });
+    }
+  };
 
   const total = () => items.reduce((acc, i) => acc + (i.price + (i.materialFee || 0)) * i.quantity, 0);
 
@@ -97,16 +152,31 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
           materialFee: dbItem.material_fee || dbItem.materialFee,
         }));
         setItems(transformedItems);
+        // Save to offline storage as backup
+        offlineStorage.saveCartOffline(transformedItems);
+        showSuccess('Cart loaded successfully');
       }
     } catch (error) {
       console.error('Failed to load cart from database:', error);
-      // Keep local cart as fallback
+      // Try to load from offline storage as fallback
+      try {
+        const offlineCart = await offlineStorage.loadCartOffline();
+        if (offlineCart.length > 0) {
+          setItems(offlineCart);
+          showInfo('Loaded cart from offline storage');
+        }
+      } catch (offlineError) {
+        console.error('Failed to load offline cart:', offlineError);
+        showError('Failed to load cart. Please try again.');
+      }
     }
   };
 
   // Sync current cart to database
   const syncToDatabase = async () => {
-    if (!user || user.id === 'guest' || !isOnline) return;
+    if (!user || user.id === 'guest' || !isConnected || isInternetReachable === false) {
+      return;
+    }
 
     try {
       // Clear existing cart in database
@@ -122,8 +192,24 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
           undefined // customizations
         );
       }
+
+      // Clear any pending cart sync operations
+      const pendingOps = await offlineStorage.getPendingOperations();
+      const cartSyncOps = pendingOps.filter(op => op.type === 'cart_sync');
+      for (const op of cartSyncOps) {
+        await offlineStorage.removePendingOperation(op.id);
+      }
+
+      showSuccess('Cart synced successfully');
     } catch (error) {
       console.error('Failed to sync cart to database:', error);
+      showError('Failed to sync cart. Changes saved locally.');
+
+      // Add to pending operations for retry
+      await offlineStorage.addPendingOperation({
+        type: 'cart_sync',
+        data: { items }
+      });
     }
   };
 
@@ -132,17 +218,36 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
     if (user && user.id !== 'guest') {
       loadFromDatabase();
     } else if (user?.id === 'guest') {
-      // Clear cart for guest users
-      setItems([]);
+      // Load from offline storage for guest users
+      offlineStorage.loadCartOffline().then(offlineCart => {
+        if (offlineCart.length > 0) {
+          setItems(offlineCart);
+        }
+      }).catch(error => {
+        console.error('Failed to load offline cart for guest:', error);
+      });
     }
   }, [user]);
 
-  // Monitor online status (React Native compatible)
+  // Monitor online status and sync when back online
   useEffect(() => {
-    // For React Native, we can use NetInfo or assume online by default
-    // Since this is a React Native app, window.addEventListener won't work
-    setIsOnline(true); // Assume online for now, can be enhanced with NetInfo later
-  }, []);
+    const currentOnline = isConnected && isInternetReachable !== false;
+    setIsOnline(currentOnline);
+
+    // If we just came back online, try to sync pending operations
+    if (currentOnline && user && user.id !== 'guest') {
+      // Process pending cart sync operations
+      offlineStorage.getPendingOperations().then(pendingOps => {
+        const cartSyncOps = pendingOps.filter(op => op.type === 'cart_sync');
+        if (cartSyncOps.length > 0) {
+          showInfo('Syncing cart data...', 3000);
+          syncToDatabase().catch(error => {
+            console.error('Failed to sync pending cart operations:', error);
+          });
+        }
+      });
+    }
+  }, [isConnected, isInternetReachable, user]);
 
   return (
     <CartContext.Provider value={{

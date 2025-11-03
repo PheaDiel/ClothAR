@@ -27,6 +27,60 @@ export interface BodyLandmarks {
   rightAnkle: { x: number; y: number };
 }
 
+// Enhanced pose tracking stability interfaces
+export interface PoseStabilityConfig {
+  smoothingFactor: number;
+  confidenceThreshold: number;
+  maxJitterThreshold: number;
+  temporalWindowSize: number;
+}
+
+export interface PerspectiveCorrectionConfig {
+  enableAngleCompensation: boolean;
+  enableOrientationNormalization: boolean;
+  enableDistanceScaling: boolean;
+  referenceDistance: number;
+  maxCorrectionAngle: number;
+}
+
+export interface MeasurementIntegrationConfig {
+  enableMeasurementScaling: boolean;
+  enableMeasurementPositioning: boolean;
+  measurementConfidence: number;
+  fallbackToStandardSizing: boolean;
+}
+
+// Pose history for stability tracking
+interface PoseHistoryEntry {
+  landmarks: BodyLandmarks;
+  timestamp: number;
+  confidence: number;
+  boundingBox: { x: number; y: number; width: number; height: number };
+}
+
+let poseHistory: PoseHistoryEntry[] = [];
+let stabilityConfig: PoseStabilityConfig = {
+  smoothingFactor: 0.7,
+  confidenceThreshold: 0.5,
+  maxJitterThreshold: 10,
+  temporalWindowSize: 5,
+};
+
+let perspectiveConfig: PerspectiveCorrectionConfig = {
+  enableAngleCompensation: true,
+  enableOrientationNormalization: true,
+  enableDistanceScaling: true,
+  referenceDistance: 2.0, // meters
+  maxCorrectionAngle: 45, // degrees
+};
+
+let measurementConfig: MeasurementIntegrationConfig = {
+  enableMeasurementScaling: true,
+  enableMeasurementPositioning: true,
+  measurementConfidence: 0.8,
+  fallbackToStandardSizing: true,
+};
+
 // Clothing overlay configuration
 export interface ClothingOverlay {
   id: string;
@@ -36,7 +90,50 @@ export interface ClothingOverlay {
   rotation: number;
   opacity: number;
   category: 'tops' | 'bottoms' | 'dresses' | 'outerwear';
+  layer: number; // Z-index for layering
+  physics?: ClothPhysics; // Physics properties for cloth simulation
 }
+
+// Multi-layer clothing support
+export interface ClothingLayer {
+  id: string;
+  clothing: ClothingOverlay;
+  zIndex: number;
+  visible: boolean;
+  physicsEnabled: boolean;
+}
+
+// Physics simulation interfaces
+export interface ClothPhysics {
+  stiffness: number; // How rigid the cloth is (0-1)
+  damping: number; // How much movement is damped (0-1)
+  gravity: number; // Gravity effect (0-1)
+  windForce: { x: number; y: number }; // Wind simulation
+  deformationPoints: Array<{ x: number; y: number; weight: number }>; // Points where cloth can deform
+  anchorPoints: Array<{ landmark: keyof BodyLandmarks; offset: { x: number; y: number } }>; // Points anchored to body
+}
+
+export interface PhysicsConfig {
+  enablePhysics: boolean;
+  gravityStrength: number;
+  windEnabled: boolean;
+  clothStiffness: number;
+  simulationSteps: number;
+  maxLayers: number;
+}
+
+// Physics simulation state
+export let physicsConfig: PhysicsConfig = {
+  enablePhysics: true,
+  gravityStrength: 0.3,
+  windEnabled: false,
+  clothStiffness: 0.7,
+  simulationSteps: 3,
+  maxLayers: 3,
+};
+
+let clothingLayers: ClothingLayer[] = [];
+let physicsSimulationRunning = false;
 
 // Function to load a 2D clothing image for overlay
 export async function loadClothingImage(imageUri: string) {
@@ -103,7 +200,130 @@ export async function initializeAR(): Promise<boolean> {
   }
 }
 
-// Function to detect body pose using ML model
+// Configuration functions for enhanced features
+export function setPoseStabilityConfig(config: Partial<PoseStabilityConfig>) {
+  stabilityConfig = { ...stabilityConfig, ...config };
+}
+
+export function setPerspectiveCorrectionConfig(config: Partial<PerspectiveCorrectionConfig>) {
+  perspectiveConfig = { ...perspectiveConfig, ...config };
+}
+
+export function setMeasurementIntegrationConfig(config: Partial<MeasurementIntegrationConfig>) {
+  measurementConfig = { ...measurementConfig, ...config };
+}
+
+export function setPhysicsConfig(config: Partial<PhysicsConfig>) {
+  physicsConfig = { ...physicsConfig, ...config };
+}
+
+// Advanced pose stability functions
+function calculatePoseConfidence(landmarks: BodyLandmarks): number {
+  // Calculate confidence based on landmark distribution and consistency
+  const shoulderWidth = Math.abs(landmarks.rightShoulder.x - landmarks.leftShoulder.x);
+  const hipWidth = Math.abs(landmarks.rightHip.x - landmarks.leftHip.x);
+  const torsoHeight = Math.abs((landmarks.leftShoulder.y + landmarks.rightShoulder.y) / 2 - (landmarks.leftHip.y + landmarks.rightHip.y) / 2);
+
+  // Basic validation: reasonable proportions
+  const shoulderToHipRatio = shoulderWidth / hipWidth;
+  const isValidRatio = shoulderToHipRatio > 0.8 && shoulderToHipRatio < 1.5;
+
+  const isValidHeight = torsoHeight > 50 && torsoHeight < screenHeight * 0.8;
+
+  return (isValidRatio && isValidHeight) ? 0.9 : 0.3;
+}
+
+function applyTemporalSmoothing(currentPose: PoseHistoryEntry): BodyLandmarks {
+  if (poseHistory.length === 0) {
+    return currentPose.landmarks;
+  }
+
+  // Keep only recent poses within temporal window
+  const now = Date.now();
+  poseHistory = poseHistory.filter(entry => now - entry.timestamp < 1000); // 1 second window
+
+  // Apply exponential moving average smoothing
+  let smoothedLandmarks = { ...currentPose.landmarks };
+
+  poseHistory.forEach((entry, index) => {
+    const weight = Math.pow(stabilityConfig.smoothingFactor, poseHistory.length - index);
+    (Object.keys(smoothedLandmarks) as Array<keyof BodyLandmarks>).forEach(key => {
+      smoothedLandmarks[key] = {
+        x: smoothedLandmarks[key].x * (1 - weight) + entry.landmarks[key].x * weight,
+        y: smoothedLandmarks[key].y * (1 - weight) + entry.landmarks[key].y * weight,
+      };
+    });
+  });
+
+  return smoothedLandmarks;
+}
+
+function detectAndCorrectPerspective(landmarks: BodyLandmarks, boundingBox: any): BodyLandmarks {
+  if (!perspectiveConfig.enableAngleCompensation && !perspectiveConfig.enableOrientationNormalization) {
+    return landmarks;
+  }
+
+  let correctedLandmarks = { ...landmarks };
+
+  // Calculate body orientation angle
+  const shoulderCenter = {
+    x: (landmarks.leftShoulder.x + landmarks.rightShoulder.x) / 2,
+    y: (landmarks.leftShoulder.y + landmarks.rightShoulder.y) / 2,
+  };
+  const hipCenter = {
+    x: (landmarks.leftHip.x + landmarks.rightHip.x) / 2,
+    y: (landmarks.leftHip.y + landmarks.rightHip.y) / 2,
+  };
+
+  const bodyAngle = Math.atan2(hipCenter.y - shoulderCenter.y, hipCenter.x - shoulderCenter.x) * (180 / Math.PI);
+
+  // Apply orientation normalization if enabled
+  if (perspectiveConfig.enableOrientationNormalization && Math.abs(bodyAngle) > 5) {
+    const correctionAngle = Math.min(Math.max(bodyAngle, -perspectiveConfig.maxCorrectionAngle), perspectiveConfig.maxCorrectionAngle);
+    const cos = Math.cos(-correctionAngle * Math.PI / 180);
+    const sin = Math.sin(-correctionAngle * Math.PI / 180);
+
+    // Rotate all landmarks around body center
+    const bodyCenter = {
+      x: (shoulderCenter.x + hipCenter.x) / 2,
+      y: (shoulderCenter.y + hipCenter.y) / 2,
+    };
+
+    (Object.keys(correctedLandmarks) as Array<keyof BodyLandmarks>).forEach(key => {
+      const point = correctedLandmarks[key];
+      const dx = point.x - bodyCenter.x;
+      const dy = point.y - bodyCenter.y;
+
+      correctedLandmarks[key] = {
+        x: bodyCenter.x + dx * cos - dy * sin,
+        y: bodyCenter.y + dx * sin + dy * cos,
+      };
+    });
+  }
+
+  // Apply distance-based scaling if enabled
+  if (perspectiveConfig.enableDistanceScaling) {
+    const estimatedDistance = boundingBox.height / (screenHeight * 0.6); // Rough distance estimation
+    const scaleFactor = perspectiveConfig.referenceDistance / estimatedDistance;
+
+    const bodyCenter = {
+      x: (correctedLandmarks.leftShoulder.x + correctedLandmarks.rightShoulder.x) / 2,
+      y: (correctedLandmarks.leftShoulder.y + correctedLandmarks.rightShoulder.y) / 2,
+    };
+
+    (Object.keys(correctedLandmarks) as Array<keyof BodyLandmarks>).forEach(key => {
+      const point = correctedLandmarks[key];
+      correctedLandmarks[key] = {
+        x: bodyCenter.x + (point.x - bodyCenter.x) * scaleFactor,
+        y: bodyCenter.y + (point.y - bodyCenter.y) * scaleFactor,
+      };
+    });
+  }
+
+  return correctedLandmarks;
+}
+
+// Function to detect body pose using ML model with enhanced stability
 export async function detectBodyPose(imageUri?: string): Promise<{ landmarks: BodyLandmarks; boundingBox: { x: number; y: number; width: number; height: number } }> {
   try {
     console.log('🔍 DEBUG: detectBodyPose called with imageUri:', imageUri ? 'provided' : 'not provided');
@@ -294,7 +514,74 @@ export async function detectBodyPose(imageUri?: string): Promise<{ landmarks: Bo
   }
 }
 
-// Function to calculate clothing overlay position based on body landmarks with improved ML-based positioning
+// Measurement-based positioning functions
+function applyMeasurementBasedPositioning(
+  clothingCategory: string,
+  landmarks: BodyLandmarks,
+  imageDimensions: { width: number; height: number },
+  userMeasurements?: any
+): { position: { x: number; y: number }; scale: number } {
+  if (!userMeasurements || !measurementConfig.enableMeasurementPositioning) {
+    return { position: { x: 0, y: 0 }, scale: 1 };
+  }
+
+  const { leftShoulder, rightShoulder, leftHip, rightHip, nose } = landmarks;
+
+  // Extract relevant measurements for positioning
+  const userShoulderWidth = userMeasurements.shoulder || userMeasurements.shoulder_width || 16; // inches
+  const userChest = userMeasurements.chest || 40; // inches
+  const userWaist = userMeasurements.waist || 32; // inches
+  const userHip = userMeasurements.hip || 38; // inches
+  const userHeight = userMeasurements.height || 68; // inches
+
+  // Calculate detected body proportions
+  const detectedShoulderWidth = Math.abs(rightShoulder.x - leftShoulder.x);
+  const detectedHipWidth = Math.abs(rightHip.x - leftHip.x);
+  const detectedTorsoHeight = Math.abs((leftShoulder.y + rightShoulder.y) / 2 - (leftHip.y + rightHip.y) / 2);
+
+  // Calculate positioning adjustments based on user measurements
+  let positionOffset = { x: 0, y: 0 };
+  let scaleAdjustment = 1;
+
+  switch (clothingCategory) {
+    case 'tops':
+    case 'outerwear':
+      // Adjust position based on shoulder width vs user measurement
+      const shoulderRatio = detectedShoulderWidth / (userShoulderWidth * 10); // rough pixel conversion
+      positionOffset.x = (detectedShoulderWidth - detectedShoulderWidth * shoulderRatio) * 0.5;
+      positionOffset.y = (nose.y < (leftShoulder.y + rightShoulder.y) / 2) ?
+        ((leftShoulder.y + rightShoulder.y) / 2 - nose.y) * 0.1 : 0;
+      scaleAdjustment = Math.max(0.8, Math.min(1.2, shoulderRatio));
+      break;
+
+    case 'bottoms':
+      // Adjust position based on hip width vs user measurement
+      const hipRatio = detectedHipWidth / (userHip * 10);
+      positionOffset.x = (detectedHipWidth - detectedHipWidth * hipRatio) * 0.5;
+      positionOffset.y = detectedTorsoHeight * 0.1; // Slight downward adjustment
+      scaleAdjustment = Math.max(0.8, Math.min(1.2, hipRatio));
+      break;
+
+    case 'dresses':
+      // Comprehensive adjustment for full body garments
+      const bodyRatio = Math.min(
+        detectedShoulderWidth / (userShoulderWidth * 10),
+        detectedHipWidth / (userHip * 10)
+      );
+      positionOffset.x = (detectedShoulderWidth - detectedShoulderWidth * bodyRatio) * 0.5;
+      positionOffset.y = (nose.y < (leftShoulder.y + rightShoulder.y) / 2) ?
+        ((leftShoulder.y + rightShoulder.y) / 2 - nose.y) * 0.05 : 0;
+      scaleAdjustment = Math.max(0.8, Math.min(1.2, bodyRatio));
+      break;
+  }
+
+  return {
+    position: positionOffset,
+    scale: scaleAdjustment
+  };
+}
+
+// Function to calculate clothing overlay position based on body landmarks with enhanced measurement integration
 export function calculateClothingPosition(
   clothingCategory: string,
   landmarks: BodyLandmarks,
@@ -310,10 +597,10 @@ export function calculateClothingPosition(
 
   // Apply measurement-based scaling if user measurements are provided
   let scaleMultiplier = 1;
-  if (userMeasurements) {
+  if (userMeasurements && measurementConfig.enableMeasurementScaling) {
     // Calculate scale based on user's actual measurements vs detected pose proportions
     const detectedShoulderWidth = shoulderWidth;
-    const userShoulderWidth = userMeasurements.shoulder_width || 16; // inches, default average
+    const userShoulderWidth = userMeasurements.shoulder || userMeasurements.shoulder_width || 16; // inches, default average
     scaleMultiplier = detectedShoulderWidth / (userShoulderWidth * 10); // rough pixel conversion
   }
 
@@ -321,6 +608,14 @@ export function calculateClothingPosition(
   const minScale = 0.3;
   const maxScale = 2.0;
   scaleMultiplier = Math.max(minScale, Math.min(maxScale, scaleMultiplier));
+
+  // Get measurement-based positioning adjustments
+  const measurementAdjustments = applyMeasurementBasedPositioning(
+    clothingCategory,
+    landmarks,
+    imageDimensions,
+    userMeasurements
+  );
 
   switch (clothingCategory) {
     case 'tops':
@@ -335,11 +630,11 @@ export function calculateClothingPosition(
 
       // Calculate scale based on shoulder width with constraints
       const targetScale = shoulderWidth / imageDimensions.width;
-      const finalScale = Math.max(minScale, Math.min(maxScale, targetScale * scaleMultiplier));
+      const finalScale = Math.max(minScale, Math.min(maxScale, targetScale * scaleMultiplier * measurementAdjustments.scale));
 
       return {
-        x: shoulderCenterX - (imageDimensions.width * 0.5 * finalScale),
-        y: adjustedY - (imageDimensions.height * 0.2 * finalScale),
+        x: shoulderCenterX - (imageDimensions.width * 0.5 * finalScale) + measurementAdjustments.position.x,
+        y: adjustedY - (imageDimensions.height * 0.2 * finalScale) + measurementAdjustments.position.y,
         scale: finalScale
       };
 
@@ -350,11 +645,11 @@ export function calculateClothingPosition(
 
       // Calculate scale based on hip width with constraints
       const hipScale = hipWidth / imageDimensions.width;
-      const finalHipScale = Math.max(minScale, Math.min(maxScale, hipScale * scaleMultiplier));
+      const finalHipScale = Math.max(minScale, Math.min(maxScale, hipScale * scaleMultiplier * measurementAdjustments.scale));
 
       return {
-        x: hipCenterX - (imageDimensions.width * 0.5 * finalHipScale),
-        y: hipCenterY - (imageDimensions.height * 0.1 * finalHipScale),
+        x: hipCenterX - (imageDimensions.width * 0.5 * finalHipScale) + measurementAdjustments.position.x,
+        y: hipCenterY - (imageDimensions.height * 0.1 * finalHipScale) + measurementAdjustments.position.y,
         scale: finalHipScale
       };
 
@@ -369,11 +664,11 @@ export function calculateClothingPosition(
       const widthScale = shoulderWidth / imageDimensions.width;
       const heightScale = dressHeight / imageDimensions.height;
       const dressScale = Math.min(widthScale, heightScale);
-      const finalDressScale = Math.max(minScale, Math.min(maxScale, dressScale * scaleMultiplier));
+      const finalDressScale = Math.max(minScale, Math.min(maxScale, dressScale * scaleMultiplier * measurementAdjustments.scale));
 
       return {
-        x: dressCenterX - (imageDimensions.width * 0.5 * finalDressScale),
-        y: dressTopY - (imageDimensions.height * 0.05 * finalDressScale),
+        x: dressCenterX - (imageDimensions.width * 0.5 * finalDressScale) + measurementAdjustments.position.x,
+        y: dressTopY - (imageDimensions.height * 0.05 * finalDressScale) + measurementAdjustments.position.y,
         scale: finalDressScale
       };
 
@@ -384,6 +679,178 @@ export function calculateClothingPosition(
         scale: Math.max(minScale, Math.min(maxScale, scaleMultiplier))
       };
   }
+}
+
+// Multi-layer clothing management functions
+export function addClothingLayer(clothingItem: any, layerIndex: number = 0): ClothingLayer {
+  const layer: ClothingLayer = {
+    id: clothingItem.id,
+    clothing: {
+      id: clothingItem.id,
+      imageUri: clothingItem.virtual_tryon_images?.[0] || clothingItem.images?.[0] || clothingItem.imageUri,
+      position: { x: 0, y: 0 },
+      scale: 1,
+      rotation: 0,
+      opacity: 0.85,
+      category: clothingItem.category,
+      layer: layerIndex,
+      physics: createDefaultPhysicsForCategory(clothingItem.category)
+    },
+    zIndex: layerIndex,
+    visible: true,
+    physicsEnabled: physicsConfig.enablePhysics
+  };
+
+  // Insert at correct position or add to end
+  const existingIndex = clothingLayers.findIndex(l => l.zIndex >= layerIndex);
+  if (existingIndex >= 0) {
+    clothingLayers.splice(existingIndex, 0, layer);
+  } else {
+    clothingLayers.push(layer);
+  }
+
+  // Reorder z-indices
+  clothingLayers.forEach((l, index) => {
+    l.zIndex = index;
+    l.clothing.layer = index;
+  });
+
+  return layer;
+}
+
+export function removeClothingLayer(layerId: string): boolean {
+  const index = clothingLayers.findIndex(layer => layer.id === layerId);
+  if (index >= 0) {
+    clothingLayers.splice(index, 1);
+    // Reorder remaining layers
+    clothingLayers.forEach((l, i) => {
+      l.zIndex = i;
+      l.clothing.layer = i;
+    });
+    return true;
+  }
+  return false;
+}
+
+export function updateClothingLayers(bodyPose: { landmarks: BodyLandmarks; boundingBox: any }, userMeasurements?: any): ClothingLayer[] {
+  clothingLayers.forEach(layer => {
+    if (layer.visible) {
+      const imageDimensions = { width: 200, height: 300 }; // Placeholder dimensions
+      const position = calculateClothingPosition(layer.clothing.category, bodyPose.landmarks, imageDimensions, userMeasurements);
+
+      layer.clothing.position = { x: position.x, y: position.y };
+      layer.clothing.scale = position.scale;
+
+      // Apply physics simulation if enabled
+      if (layer.physicsEnabled && layer.clothing.physics) {
+        applyPhysicsToLayer(layer, bodyPose);
+      }
+    }
+  });
+
+  return clothingLayers;
+}
+
+function createDefaultPhysicsForCategory(category: string): ClothPhysics {
+  const basePhysics: ClothPhysics = {
+    stiffness: 0.7,
+    damping: 0.8,
+    gravity: physicsConfig.gravityStrength,
+    windForce: { x: 0, y: 0 },
+    deformationPoints: [],
+    anchorPoints: []
+  };
+
+  switch (category) {
+    case 'tops':
+      return {
+        ...basePhysics,
+        stiffness: 0.6,
+        anchorPoints: [
+          { landmark: 'leftShoulder', offset: { x: -10, y: 0 } },
+          { landmark: 'rightShoulder', offset: { x: 10, y: 0 } },
+          { landmark: 'leftHip', offset: { x: -5, y: 20 } },
+          { landmark: 'rightHip', offset: { x: 5, y: 20 } }
+        ]
+      };
+    case 'bottoms':
+      return {
+        ...basePhysics,
+        stiffness: 0.8,
+        anchorPoints: [
+          { landmark: 'leftHip', offset: { x: -15, y: 0 } },
+          { landmark: 'rightHip', offset: { x: 15, y: 0 } },
+          { landmark: 'leftKnee', offset: { x: -10, y: 30 } },
+          { landmark: 'rightKnee', offset: { x: 10, y: 30 } }
+        ]
+      };
+    case 'dresses':
+      return {
+        ...basePhysics,
+        stiffness: 0.5,
+        anchorPoints: [
+          { landmark: 'leftShoulder', offset: { x: -8, y: 0 } },
+          { landmark: 'rightShoulder', offset: { x: 8, y: 0 } },
+          { landmark: 'leftHip', offset: { x: -12, y: 40 } },
+          { landmark: 'rightHip', offset: { x: 12, y: 40 } }
+        ]
+      };
+    case 'outerwear':
+      return {
+        ...basePhysics,
+        stiffness: 0.9,
+        anchorPoints: [
+          { landmark: 'leftShoulder', offset: { x: -12, y: 0 } },
+          { landmark: 'rightShoulder', offset: { x: 12, y: 0 } },
+          { landmark: 'leftHip', offset: { x: -8, y: 25 } },
+          { landmark: 'rightHip', offset: { x: 8, y: 25 } }
+        ]
+      };
+    default:
+      return basePhysics;
+  }
+}
+
+function applyPhysicsToLayer(layer: ClothingLayer, bodyPose: { landmarks: BodyLandmarks; boundingBox: any }) {
+  if (!layer.clothing.physics) return;
+
+  const physics = layer.clothing.physics;
+  const currentTime = Date.now();
+
+  // Apply gravity effect
+  if (physics.gravity > 0) {
+    const gravityOffset = physics.gravity * 2;
+    layer.clothing.position.y += gravityOffset;
+  }
+
+  // Apply wind force if enabled
+  if (physicsConfig.windEnabled && physics.windForce) {
+    layer.clothing.position.x += physics.windForce.x * 0.1;
+    layer.clothing.position.y += physics.windForce.y * 0.1;
+  }
+
+  // Simulate cloth deformation based on anchor points
+  physics.anchorPoints.forEach(anchor => {
+    const landmarkPos = bodyPose.landmarks[anchor.landmark];
+    if (landmarkPos) {
+      const targetX = landmarkPos.x + anchor.offset.x;
+      const targetY = landmarkPos.y + anchor.offset.y;
+
+      // Apply spring physics towards anchor points
+      const dx = targetX - layer.clothing.position.x;
+      const dy = targetY - layer.clothing.position.y;
+
+      const force = physics.stiffness;
+      const damping = physics.damping;
+
+      layer.clothing.position.x += dx * force * damping;
+      layer.clothing.position.y += dy * force * damping;
+    }
+  });
+
+  // Add subtle movement for realism
+  const timeOffset = Math.sin(currentTime * 0.001) * 0.5;
+  layer.clothing.position.x += timeOffset * (1 - physics.stiffness);
 }
 
 // Function to render clothing overlay on detected body with enhanced features
@@ -407,7 +874,9 @@ export async function renderClothingOverlay(
       scale: position.scale,
       rotation: 0,
       opacity: 0.85, // Slightly higher opacity for better visibility
-      category: clothingItem.category
+      category: clothingItem.category,
+      layer: 0, // Default layer
+      physics: createDefaultPhysicsForCategory(clothingItem.category)
     };
 
     return overlay;

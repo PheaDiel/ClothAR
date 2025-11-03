@@ -6,6 +6,7 @@ import { ProductService } from '../services/productService';
 
 type InventoryContextType = {
   items: Item[];
+  loading: boolean;
   addItem: (payload: Omit<Item, 'id'>) => Promise<void>;
   editItem: (id: string, payload: Partial<Item>) => Promise<void>;
   removeItem: (id: string) => Promise<void>;
@@ -14,6 +15,7 @@ type InventoryContextType = {
 
 export const InventoryContext = createContext<InventoryContextType>({
   items: [],
+  loading: false,
   addItem: async () => {},
   editItem: async () => {},
   removeItem: async () => {},
@@ -102,8 +104,10 @@ const SAMPLE: Item[] = [
 
 export const InventoryProvider = ({ children }: { children: ReactNode }) => {
     const [items, setItems] = useState<Item[]>([]);
+    const [loading, setLoading] = useState<boolean>(true);
 
   const reload = async () => {
+    setLoading(true);
     try {
       // Try to load real products from database first
       const result = await ProductService.getProducts();
@@ -133,6 +137,8 @@ export const InventoryProvider = ({ children }: { children: ReactNode }) => {
       // Fallback to sample data
       setItems(SAMPLE);
       await save('@inventory_items', SAMPLE);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -161,7 +167,7 @@ export const InventoryProvider = ({ children }: { children: ReactNode }) => {
   };
 
   return (
-    <InventoryContext.Provider value={{ items, addItem, editItem, removeItem, reload }}>
+    <InventoryContext.Provider value={{ items, loading, addItem, editItem, removeItem, reload }}>
       {children}
     </InventoryContext.Provider>
   );

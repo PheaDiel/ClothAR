@@ -15,8 +15,9 @@ import Animated, {
   runOnJS,
 } from 'react-native-reanimated';
 import { PanGestureHandler, TapGestureHandler } from 'react-native-gesture-handler';
-import { isARSupported, detectBodyPose, renderClothingOverlay, ClothingOverlay, initializeAR, BodyLandmarks } from '../../utils/arUtils';
+import { isARSupported, detectBodyPose, renderClothingOverlay, ClothingOverlay, initializeAR, BodyLandmarks, setPoseStabilityConfig, setPerspectiveCorrectionConfig, setMeasurementIntegrationConfig, setPhysicsConfig, addClothingLayer, removeClothingLayer, updateClothingLayers, ClothingLayer, physicsConfig } from '../../utils/arUtils';
 import { ProductService } from '../../services/productService';
+import { MeasurementService } from '../../services/measurementService';
 import { wp, hp, rf, rw, rh } from '../../utils/responsiveUtils';
 import VirtualTryOnTutorial, { shouldShowVirtualTryOnTutorial } from '../../components/VirtualTryOnTutorial';
 
@@ -33,6 +34,8 @@ export default function CameraScreen() {
   const [bodyPose, setBodyPose] = useState<any>(null);
   const [clothingOverlay, setClothingOverlay] = useState<ClothingOverlay | null>(null);
   const [selectedClothing, setSelectedClothing] = useState<any>(null);
+  const [clothingLayers, setClothingLayers] = useState<ClothingLayer[]>([]);
+  const [multiLayerMode, setMultiLayerMode] = useState(false);
   const [clothingItems, setClothingItems] = useState<any[]>([]);
   const [arSettings, setArSettings] = useState({
     showGrid: false,
@@ -49,6 +52,8 @@ export default function CameraScreen() {
     processingTime: 0,
     lastFrameTime: Date.now(),
   });
+  const [userMeasurements, setUserMeasurements] = useState<any>(null);
+  const [measurementIntegrationStatus, setMeasurementIntegrationStatus] = useState<'loading' | 'loaded' | 'error' | 'none'>('none');
 
   // Animation values
   const controlsVisible = useSharedValue(1);
@@ -103,6 +108,25 @@ export default function CameraScreen() {
     }
   };
 
+  const loadUserMeasurements = async () => {
+    try {
+      setMeasurementIntegrationStatus('loading');
+      const result = await MeasurementService.getDefaultMeasurement();
+
+      if (result.success && result.measurement) {
+        setUserMeasurements(result.measurement.measurements);
+        setMeasurementIntegrationStatus('loaded');
+        console.log('User measurements loaded for AR integration:', result.measurement.measurements);
+      } else {
+        setMeasurementIntegrationStatus('none');
+        console.log('No default measurements found for user');
+      }
+    } catch (error) {
+      console.error('Error loading user measurements:', error);
+      setMeasurementIntegrationStatus('error');
+    }
+  };
+
   useEffect(() => {
     (async () => {
       try {
@@ -126,6 +150,41 @@ export default function CameraScreen() {
 
         // Check if tutorial should be shown
         checkTutorialStatus();
+
+        // Load user measurements for AR integration
+        loadUserMeasurements();
+
+        // Configure enhanced AR features
+        setPoseStabilityConfig({
+          smoothingFactor: 0.7,
+          confidenceThreshold: 0.5,
+          maxJitterThreshold: 10,
+          temporalWindowSize: 5,
+        });
+
+        setPerspectiveCorrectionConfig({
+          enableAngleCompensation: true,
+          enableOrientationNormalization: true,
+          enableDistanceScaling: true,
+          referenceDistance: 2.0,
+          maxCorrectionAngle: 45,
+        });
+
+        setMeasurementIntegrationConfig({
+          enableMeasurementScaling: true,
+          enableMeasurementPositioning: true,
+          measurementConfidence: 0.8,
+          fallbackToStandardSizing: true,
+        });
+
+        setPhysicsConfig({
+          enablePhysics: true,
+          gravityStrength: 0.3,
+          windEnabled: false,
+          clothStiffness: 0.7,
+          simulationSteps: 3,
+          maxLayers: 3,
+        });
       } catch (error) {
         Alert.alert('Error', `Camera initialization failed: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -230,48 +289,20 @@ export default function CameraScreen() {
       const poseResult = await detectBodyPose(photo.uri);
       console.log('🔍 DEBUG: Pose detection completed, landmarks count:', Object.keys(poseResult.landmarks).length);
 
-      // Update pose state with smoothing to reduce jitter
-      setBodyPose((prevPose: any) => {
-        if (!prevPose) return poseResult;
+      // Enhanced pose processing is now handled in arUtils.ts
+      // The pose state is updated there with advanced stability features
 
-        // Simple smoothing: average with previous pose to reduce jitter
-        const smoothedLandmarks: BodyLandmarks = {
-          nose: { x: 0, y: 0 },
-          leftShoulder: { x: 0, y: 0 },
-          rightShoulder: { x: 0, y: 0 },
-          leftElbow: { x: 0, y: 0 },
-          rightElbow: { x: 0, y: 0 },
-          leftWrist: { x: 0, y: 0 },
-          rightWrist: { x: 0, y: 0 },
-          leftHip: { x: 0, y: 0 },
-          rightHip: { x: 0, y: 0 },
-          leftKnee: { x: 0, y: 0 },
-          rightKnee: { x: 0, y: 0 },
-          leftAnkle: { x: 0, y: 0 },
-          rightAnkle: { x: 0, y: 0 },
-        };
-        const smoothingFactor = 0.7; // Higher = more smoothing
-
-        (Object.keys(poseResult.landmarks) as Array<keyof BodyLandmarks>).forEach(key => {
-          const current = poseResult.landmarks[key];
-          const previous = prevPose.landmarks[key];
-          smoothedLandmarks[key] = {
-            x: previous.x * smoothingFactor + current.x * (1 - smoothingFactor),
-            y: previous.y * smoothingFactor + current.y * (1 - smoothingFactor),
-          };
-        });
-
-        return {
-          landmarks: smoothedLandmarks,
-          boundingBox: poseResult.boundingBox
-        };
-      });
-
-      // Update overlay if clothing is selected
-      if (selectedClothing) {
+      // Update overlay if clothing is selected (single layer mode)
+      if (selectedClothing && !multiLayerMode) {
         const imageDimensions = { width: 200, height: 300 }; // Placeholder dimensions
-        const overlay = await renderClothingOverlay(selectedClothing, poseResult, imageDimensions);
+        const overlay = await renderClothingOverlay(selectedClothing, poseResult, imageDimensions, userMeasurements);
         setClothingOverlay(overlay);
+      }
+
+      // Update multi-layer clothing if in multi-layer mode
+      if (multiLayerMode) {
+        const updatedLayers = updateClothingLayers(poseResult, userMeasurements);
+        setClothingLayers(updatedLayers);
       }
 
       // Update performance metrics
@@ -328,17 +359,25 @@ export default function CameraScreen() {
     setPoseDetectionError(null);
 
     try {
-      // If real-time processing is not active, do a one-time pose detection
-      if (!isARMode || !frameProcessingTimer.current) {
-        const pose = await detectBodyPose();
-        setBodyPose(pose);
+      if (multiLayerMode) {
+        // Add to multi-layer system
+        const layerIndex = clothingLayers.length;
+        const newLayer = addClothingLayer(item, layerIndex);
+        setClothingLayers(prev => [...prev, newLayer]);
+      } else {
+        // Single layer mode
+        // If real-time processing is not active, do a one-time pose detection
+        if (!isARMode || !frameProcessingTimer.current) {
+          const pose = await detectBodyPose();
+          setBodyPose(pose);
 
-        // Calculate overlay position based on body pose with improved positioning
-        const imageDimensions = { width: 200, height: 300 }; // Placeholder dimensions
-        const overlay = await renderClothingOverlay(item, pose, imageDimensions);
-        setClothingOverlay(overlay);
+          // Calculate overlay position based on body pose with measurement integration
+          const imageDimensions = { width: 200, height: 300 }; // Placeholder dimensions
+          const overlay = await renderClothingOverlay(item, pose, imageDimensions, userMeasurements);
+          setClothingOverlay(overlay);
+        }
+        // If real-time processing is active, overlay will be updated automatically
       }
-      // If real-time processing is active, overlay will be updated automatically
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to apply clothing overlay';
       setPoseDetectionError(errorMessage);
@@ -347,6 +386,26 @@ export default function CameraScreen() {
     } finally {
       setIsLoading(false);
       setIsLoadingPose(false);
+    }
+  };
+
+  const toggleMultiLayerMode = () => {
+    setMultiLayerMode(!multiLayerMode);
+    if (!multiLayerMode) {
+      // Switching to multi-layer mode
+      setClothingOverlay(null);
+      setSelectedClothing(null);
+    } else {
+      // Switching to single layer mode
+      setClothingLayers([]);
+    }
+    showControls();
+  };
+
+  const removeLayer = (layerId: string) => {
+    const success = removeClothingLayer(layerId);
+    if (success) {
+      setClothingLayers(prev => prev.filter(layer => layer.id !== layerId));
     }
   };
 
@@ -489,7 +548,8 @@ export default function CameraScreen() {
         onCameraReady={handleCameraReady}
         ratio="4:3"
       >
-        {isARMode && cameraReady && clothingOverlay && (
+        {/* Single layer clothing overlay */}
+        {isARMode && cameraReady && clothingOverlay && !multiLayerMode && (
           <Animated.View
             style={[
               styles.clothingOverlay,
@@ -512,6 +572,42 @@ export default function CameraScreen() {
             />
           </Animated.View>
         )}
+
+        {/* Multi-layer clothing overlays */}
+        {isARMode && cameraReady && multiLayerMode && clothingLayers.map((layer) => (
+          layer.visible && (
+            <Animated.View
+              key={layer.id}
+              style={[
+                styles.clothingOverlay,
+                {
+                  left: layer.clothing.position.x,
+                  top: layer.clothing.position.y,
+                  width: 200 * layer.clothing.scale,
+                  height: 300 * layer.clothing.scale,
+                  transform: [
+                    { rotate: `${layer.clothing.rotation}deg` }
+                  ],
+                  opacity: layer.clothing.opacity,
+                  zIndex: layer.zIndex,
+                }
+              ]}
+            >
+              <Image
+                source={{ uri: layer.clothing.imageUri }}
+                style={styles.overlayImage}
+                resizeMode="contain"
+              />
+              {/* Remove button for multi-layer mode */}
+              <TouchableOpacity
+                style={styles.removeLayerButton}
+                onPress={() => removeLayer(layer.id)}
+              >
+                <Ionicons name="close-circle" size={rf(20)} color="red" />
+              </TouchableOpacity>
+            </Animated.View>
+          )
+        ))}
 
         {/* Body pose landmarks visualization */}
         {isARMode && arSettings.showLandmarks && bodyPose && (
@@ -539,6 +635,15 @@ export default function CameraScreen() {
                 Error: {poseDetectionError}
               </Text>
             )}
+            {/* Measurement integration status */}
+            <Text style={[styles.performanceText, {
+              color: measurementIntegrationStatus === 'loaded' ? 'green' :
+                     measurementIntegrationStatus === 'error' ? 'red' : 'yellow'
+            }]}>
+              Measurements: {measurementIntegrationStatus === 'loaded' ? 'Active' :
+                            measurementIntegrationStatus === 'error' ? 'Error' :
+                            measurementIntegrationStatus === 'loading' ? 'Loading' : 'None'}
+            </Text>
           </View>
         )}
 
@@ -572,12 +677,24 @@ export default function CameraScreen() {
           </TouchableOpacity>
 
           {isARMode && (
-            <TouchableOpacity
-              style={[styles.controlButton, { backgroundColor: `${theme.colors.surface}99` }]}
-              onPress={toggleSettingsPanel}
-            >
-              <Ionicons name="options-outline" size={rf(20)} color={theme.colors.primary} />
-            </TouchableOpacity>
+            <>
+              <TouchableOpacity
+                style={[styles.controlButton, { backgroundColor: `${theme.colors.surface}99` }]}
+                onPress={toggleMultiLayerMode}
+              >
+                <Ionicons
+                  name={multiLayerMode ? "layers" : "layers-outline"}
+                  size={rf(20)}
+                  color={multiLayerMode ? theme.colors.primary : theme.colors.onSurface}
+                />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.controlButton, { backgroundColor: `${theme.colors.surface}99` }]}
+                onPress={toggleSettingsPanel}
+              >
+                <Ionicons name="options-outline" size={rf(20)} color={theme.colors.primary} />
+              </TouchableOpacity>
+            </>
           )}
         </Animated.View>
 
@@ -586,7 +703,9 @@ export default function CameraScreen() {
           {/* AR Mode Indicator - Smaller and more subtle */}
           {isARMode && (
             <View style={[styles.arIndicator, { backgroundColor: `${theme.colors.surface}99` }]}>
-              <Text style={[styles.arIndicatorText, { color: theme.colors.primary }]}>AR</Text>
+              <Text style={[styles.arIndicatorText, { color: theme.colors.primary }]}>
+                {multiLayerMode ? 'AR Multi' : 'AR'}
+              </Text>
             </View>
           )}
 
@@ -715,6 +834,34 @@ export default function CameraScreen() {
                     color={theme.colors.primary}
                   />
                 </TouchableOpacity>
+
+                {/* Physics Settings */}
+                <View style={styles.settingSection}>
+                  <Text style={[styles.sectionTitle, { color: theme.colors.onSurface }]}>Physics Simulation</Text>
+                  <TouchableOpacity
+                    style={styles.optionRow}
+                    onPress={() => setPhysicsConfig({ enablePhysics: !physicsConfig.enablePhysics })}
+                  >
+                    <Text style={[styles.optionText, { color: theme.colors.onSurface }]}>Enable Physics</Text>
+                    <Ionicons
+                      name={physicsConfig.enablePhysics ? 'checkbox' : 'square-outline'}
+                      size={rf(24)}
+                      color={theme.colors.primary}
+                    />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.optionRow}
+                    onPress={() => setPhysicsConfig({ windEnabled: !physicsConfig.windEnabled })}
+                  >
+                    <Text style={[styles.optionText, { color: theme.colors.onSurface }]}>Wind Effects</Text>
+                    <Ionicons
+                      name={physicsConfig.windEnabled ? 'checkbox' : 'square-outline'}
+                      size={rf(24)}
+                      color={theme.colors.primary}
+                    />
+                  </TouchableOpacity>
+                </View>
               </View>
             </View>
           )}
@@ -992,5 +1139,13 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: rf(10),
     fontWeight: '500',
+  },
+  removeLayerButton: {
+    position: 'absolute',
+    top: hp(0.5),
+    right: wp(0.5),
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    borderRadius: rw(10),
+    padding: wp(0.5),
   },
 });

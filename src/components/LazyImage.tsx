@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, StyleSheet, ViewStyle, Dimensions } from 'react-native';
 import OptimizedImage from './OptimizedImage';
+import CacheService from '../services/cacheService';
 
 const { height: screenHeight } = Dimensions.get('window');
 
@@ -31,7 +32,9 @@ const LazyImage: React.FC<LazyImageProps> = ({
 }) => {
   const [isVisible, setIsVisible] = useState(false);
   const [hasBeenVisible, setHasBeenVisible] = useState(false);
+  const [imageLoaded, setImageLoaded] = useState(false);
   const viewRef = useRef<View>(null);
+  const cacheService = CacheService.getInstance();
 
   useEffect(() => {
     if (priority === 'high') {
@@ -40,6 +43,19 @@ const LazyImage: React.FC<LazyImageProps> = ({
       setHasBeenVisible(true);
       return;
     }
+
+    // Check if image is cached
+    const checkImageCache = async () => {
+      if (typeof source === 'object' && source.uri) {
+        const cached = await cacheService.get<boolean>(`image_loaded_${source.uri}`);
+        if (cached) {
+          setImageLoaded(true);
+          setIsVisible(true);
+          setHasBeenVisible(true);
+          return;
+        }
+      }
+    };
 
     const checkVisibility = () => {
       if (viewRef.current) {
@@ -56,6 +72,9 @@ const LazyImage: React.FC<LazyImageProps> = ({
       }
     };
 
+    // Check cache first
+    checkImageCache();
+
     // Check visibility immediately
     checkVisibility();
 
@@ -63,7 +82,7 @@ const LazyImage: React.FC<LazyImageProps> = ({
     const interval = setInterval(checkVisibility, 100);
 
     return () => clearInterval(interval);
-  }, [threshold, priority, hasBeenVisible]);
+  }, [threshold, priority, hasBeenVisible, source, cacheService]);
 
   return (
     <View ref={viewRef} style={[styles.container, style]}>
@@ -73,7 +92,14 @@ const LazyImage: React.FC<LazyImageProps> = ({
           style={styles.image}
           placeholder={placeholder}
           resizeMode={resizeMode}
-          onLoad={onLoad}
+          onLoad={() => {
+            // Cache that this image has been loaded successfully
+            if (typeof source === 'object' && source.uri) {
+              cacheService.set(`image_loaded_${source.uri}`, true, { ttl: 24 * 60 * 60 * 1000 }); // 24 hours
+            }
+            setImageLoaded(true);
+            onLoad?.();
+          }}
           onError={onError}
           priority={priority}
           quality={quality}

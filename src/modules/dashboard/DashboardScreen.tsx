@@ -1,6 +1,10 @@
 import React, { useContext, useMemo, useState, useEffect } from 'react';
-import { View, FlatList, StyleSheet, TouchableOpacity, Alert, ScrollView } from 'react-native';
+import { View, FlatList, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useToast } from '../../context/ToastContext';
+import { useNetwork } from '../../context/NetworkContext';
+import { SkeletonCard } from '../../components/SkeletonLoader';
+import ErrorBoundary from '../../components/ErrorBoundary';
 import { Searchbar, Chip, Text, Banner, Button } from 'react-native-paper';
 import { InventoryContext } from '../../context/InventoryContext';
 import { AuthContext } from '../../context/AuthContext';
@@ -14,9 +18,11 @@ import { getBusinessLocation } from '../../services/api';
 import { theme } from '../../theme/theme';
 
 export default function DashboardScreen({ navigation }: { navigation: any }) {
-   const { items } = useContext(InventoryContext);
+   const { items, loading: inventoryLoading } = useContext(InventoryContext);
    const { user } = useContext(AuthContext);
    const { total, count } = useContext(CartContext);
+   const { showInfo } = useToast();
+   const { isConnected } = useNetwork();
    const [query, setQuery] = useState('');
    const [category, setCategory] = useState<string | null>(null);
    const [businessLocation, setBusinessLocation] = useState<{ latitude: number; longitude: number; address: string; name: string } | null>(null);
@@ -45,19 +51,13 @@ export default function DashboardScreen({ navigation }: { navigation: any }) {
 
   const handleItemPress = (item: Item) => {
     if (isGuest) {
-      Alert.alert(
-        "Guest Access Limitation",
+      showInfo(
         "As a guest, you have limited access to features. Please create an account to unlock full functionality.",
-        [
-          {
-            text: "Cancel",
-            style: "cancel"
-          },
-          {
-            text: "Create Account",
-            onPress: () => navigation.navigate('Register')
-          }
-        ]
+        6000,
+        {
+          label: "Create Account",
+          onPress: () => navigation.navigate('Register')
+        }
       );
     } else {
       navigation.navigate('Product', { item });
@@ -99,7 +99,13 @@ export default function DashboardScreen({ navigation }: { navigation: any }) {
       </View>
 
       <View style={styles.content}>
-        {filtered.length > 0 ? (
+        {inventoryLoading ? (
+          <View style={styles.loadingContainer}>
+            <SkeletonCard />
+            <SkeletonCard />
+            <SkeletonCard />
+          </View>
+        ) : filtered.length > 0 ? (
           <FlatList
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -116,7 +122,9 @@ export default function DashboardScreen({ navigation }: { navigation: any }) {
           />
         ) : (
           <View style={styles.noItemsContainer}>
-            <Text style={styles.noItemsText}>No items found</Text>
+            <Text style={styles.noItemsText}>
+              {isConnected ? 'No items found' : 'No internet connection. Items will load when online.'}
+            </Text>
           </View>
         )}
       </View>
@@ -139,5 +147,6 @@ const styles = StyleSheet.create({
     itemContainer: { marginRight: wp(2) },
     mapContainer: { flex: 1 },
     noItemsContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    noItemsText: { textAlign: 'center', fontSize: wp(4) }
+    noItemsText: { textAlign: 'center', fontSize: wp(4) },
+    loadingContainer: { flexDirection: 'row', padding: wp(3) }
    });
