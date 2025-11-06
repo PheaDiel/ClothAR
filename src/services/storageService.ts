@@ -122,7 +122,7 @@ export class StorageService {
   }
 
   /**
-   * Upload image to Supabase Storage
+   * Upload image to Supabase Storage with fallback handling
    */
   static async uploadImage(
     uri: string,
@@ -130,56 +130,155 @@ export class StorageService {
     folder: 'products' | 'virtual-tryon' = 'products'
   ): Promise<UploadResult> {
     try {
+      console.log('🔄 StorageService: Starting image upload process...');
+      console.log('📁 Upload details:', { uri, fileName, folder });
+
       // Get file info
+      console.log('🔄 StorageService: Fetching image blob...');
       const response = await fetch(uri);
       const blob = await response.blob();
+      console.log('✅ StorageService: Blob fetched, size:', blob.size, 'type:', blob.type);
 
       // Validate image
       const validation = this.validateImage(uri, blob.size);
       if (!validation.valid) {
+        console.error('❌ StorageService: Image validation failed:', validation.error);
         return { success: false, error: validation.error };
       }
+      console.log('✅ StorageService: Image validation passed');
 
       // Compress image for upload
+      console.log('🔄 StorageService: Compressing image...');
       const compressedUri = await this.compressImage(uri, {
         compress: 0.8,
         resize: { width: 1200, height: 1200 } // Max dimensions
       });
+      console.log('✅ StorageService: Image compressed');
 
       // Get compressed blob
       const compressedResponse = await fetch(compressedUri);
       const compressedBlob = await compressedResponse.blob();
+      console.log('✅ StorageService: Compressed blob ready, size:', compressedBlob.size);
 
       // Generate unique filename
       const timestamp = Date.now();
       const extension = fileName.split('.').pop() || 'jpg';
       const uniqueFileName = `${folder}/${timestamp}_${Math.random().toString(36).substring(2)}.${extension}`;
+      console.log('📝 StorageService: Generated filename:', uniqueFileName);
 
-      // Upload to Supabase Storage
-      const { data, error } = await supabase.storage
-        .from(this.BUCKET_NAME)
-        .upload(uniqueFileName, compressedBlob, {
-          contentType: compressedBlob.type,
-          upsert: false
-        });
+      // Check Supabase connection with timeout
+      console.log('🔄 StorageService: Checking Supabase connection...');
+      try {
+        const connectionTest = Promise.race([
+          supabase.storage.from(this.BUCKET_NAME).list('', { limit: 1 }),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Connection timeout')), 15000) // Increased timeout
+          )
+        ]);
 
-      if (error) {
-        console.error('Upload error:', error);
-        return { success: false, error: error.message };
+        const { data: testData, error: testError } = await connectionTest as any;
+        if (testError) {
+          console.error('❌ StorageService: Supabase connection test failed:', testError);
+          console.error('❌ Error details:', {
+            message: testError.message,
+            statusCode: testError.statusCode,
+            details: testError.details
+          });
+
+          // Check if it's a network issue vs permission issue
+          if (testError.message?.includes('fetch') || testError.message?.includes('network')) {
+            return { success: false, error: 'Network connection failed. Please check your internet connection and try again.' };
+          } else if (testError.message?.includes('permission') || testError.message?.includes('policy')) {
+            return { success: false, error: 'Access denied. Please contact administrator.' };
+          } else {
+            return { success: false, error: `Connection test failed: ${testError.message}` };
+          }
+        }
+        console.log('✅ StorageService: Supabase connection OK');
+      } catch (connError: any) {
+        console.error('❌ StorageService: Supabase connection exception:', connError);
+        if (connError.message === 'Connection timeout') {
+          return { success: false, error: 'Network timeout. Please check your internet connection and try again.' };
+        }
+        return { success: false, error: `Network error: ${connError.message}` };
       }
 
-      // Get public URL
-      const { data: urlData } = supabase.storage
-        .from(this.BUCKET_NAME)
-        .getPublicUrl(uniqueFileName);
+      // Upload to Supabase Storage with timeout
+      console.log('🔄 StorageService: Uploading to Supabase Storage...');
+      try {
+        const uploadPromise = supabase.storage
+          .from(this.BUCKET_NAME)
+          .upload(uniqueFileName, compressedBlob, {
+            contentType: compressedBlob.type,
+            upsert: false
+          });
 
-      return {
-        success: true,
-        url: urlData.publicUrl
-      };
+        const uploadWithTimeout = Promise.race([
+          uploadPromise,
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Upload timeout')), 30000)
+          )
+        ]);
+
+        const { data, error } = await uploadWithTimeout as any;
+
+        if (error) {
+          console.error('❌ StorageService: Upload error:', error);
+          console.error('❌ StorageService: Error details:', {
+            message: error.message,
+            statusCode: error.statusCode,
+            error: error.error
+          });
+
+          // Provide more specific error messages
+          if (error.message?.includes('JWT')) {
+            return { success: false, error: 'Authentication error. Please log out and log back in.' };
+          } else if (error.message?.includes('permission') || error.message?.includes('policy')) {
+            return { success: false, error: 'Permission denied. Please contact administrator.' };
+          } else if (error.message?.includes('storage') || error.message?.includes('bucket')) {
+            return { success: false, error: 'Storage configuration error. Please contact administrator.' };
+          }
+
+          return { success: false, error: error.message };
+        }
+
+        console.log('✅ StorageService: Upload successful, data:', data);
+
+        // Get public URL
+        const { data: urlData } = supabase.storage
+          .from(this.BUCKET_NAME)
+          .getPublicUrl(uniqueFileName);
+
+        console.log('✅ StorageService: Public URL generated:', urlData.publicUrl);
+
+        return {
+          success: true,
+          url: urlData.publicUrl
+        };
+
+      } catch (uploadError: any) {
+        console.error('❌ StorageService: Upload timeout or exception:', uploadError);
+        if (uploadError.message === 'Upload timeout') {
+          return { success: false, error: 'Upload timeout. Please check your internet connection and try again.' };
+        }
+        return { success: false, error: `Upload failed: ${uploadError.message}` };
+      }
 
     } catch (error: any) {
-      console.error('Image upload error:', error);
+      console.error('❌ StorageService: Image upload exception:', error);
+      console.error('❌ StorageService: Exception details:', {
+        message: error.message,
+        stack: error.stack,
+        name: error.name
+      });
+
+      // Provide user-friendly error messages
+      if (error.message?.includes('Network request failed')) {
+        return { success: false, error: 'Network request failed. Please check your internet connection and try again.' };
+      } else if (error.message?.includes('timeout')) {
+        return { success: false, error: 'Request timeout. Please try again.' };
+      }
+
       return {
         success: false,
         error: error.message || 'Failed to upload image'
@@ -188,7 +287,7 @@ export class StorageService {
   }
 
   /**
-   * Upload multiple images
+   * Upload multiple images with retry logic
    */
   static async uploadMultipleImages(
     uris: string[],
@@ -200,9 +299,24 @@ export class StorageService {
 
     for (const uri of uris) {
       const fileName = `image_${completed + 1}.jpg`;
-      const result = await this.uploadImage(uri, fileName, folder);
-      results.push(result);
 
+      // Retry logic for failed uploads
+      let result: UploadResult;
+      let attempts = 0;
+      const maxAttempts = 3;
+
+      do {
+        attempts++;
+        console.log(`🔄 StorageService: Upload attempt ${attempts}/${maxAttempts} for image ${completed + 1}`);
+        result = await this.uploadImage(uri, fileName, folder);
+
+        if (!result.success && attempts < maxAttempts) {
+          console.log(`⏳ StorageService: Upload failed, retrying in 2 seconds...`);
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      } while (!result.success && attempts < maxAttempts);
+
+      results.push(result);
       completed++;
       onProgress?.(completed, uris.length);
     }
@@ -242,6 +356,66 @@ export class StorageService {
       return {
         success: false,
         error: error.message || 'Failed to delete image'
+      };
+    }
+  }
+
+  /**
+   * Test basic connectivity to Supabase
+   */
+  static async testConnectivity(): Promise<{ success: boolean; error?: string; details?: any }> {
+    try {
+      console.log('🔄 StorageService: Testing Supabase connectivity...');
+
+      // Test 1: Basic Supabase client connection
+      console.log('🔄 Testing basic Supabase client...');
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) {
+        console.error('❌ Session test failed:', sessionError);
+        return { success: false, error: 'Authentication error', details: sessionError };
+      }
+      console.log('✅ Session test passed');
+
+      // Test 2: Storage bucket access
+      console.log('🔄 Testing storage bucket access...');
+      const { data: listData, error: listError } = await supabase.storage
+        .from(this.BUCKET_NAME)
+        .list('', { limit: 1 });
+
+      if (listError) {
+        console.error('❌ Storage list test failed:', listError);
+        return { success: false, error: 'Storage access error', details: listError };
+      }
+      console.log('✅ Storage access test passed');
+
+      // Test 3: Network connectivity to Supabase URL
+      console.log('🔄 Testing network connectivity...');
+      const supabaseUrl = 'https://cllrgwibouypimgccfng.supabase.co'; // From .env
+      const testResponse = await fetch(`${supabaseUrl}/rest/v1/`, {
+        method: 'HEAD',
+        headers: {
+          'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNsbHJnd2lib3V5cGltZ2NjZm5nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk2NzQ5OTcsImV4cCI6MjA3NTI1MDk5N30.eFBPyDT8jpDBB15yrvKRkweVB4tBSKI2ENFbSIPj0sM',
+        },
+      });
+
+      if (!testResponse.ok) {
+        console.error('❌ Network test failed:', testResponse.status, testResponse.statusText);
+        return { success: false, error: 'Network connectivity error', details: { status: testResponse.status, statusText: testResponse.statusText } };
+      }
+      console.log('✅ Network connectivity test passed');
+
+      return { success: true };
+
+    } catch (error: any) {
+      console.error('❌ Connectivity test exception:', error);
+      return {
+        success: false,
+        error: 'Connectivity test failed',
+        details: {
+          message: error.message,
+          name: error.name,
+          stack: error.stack
+        }
       };
     }
   }

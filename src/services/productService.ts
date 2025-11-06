@@ -285,21 +285,146 @@ export class ProductService {
   }
 
   /**
-   * Get all fabric types
+    * Get all fabric types
+    */
+   static async getFabricTypes(): Promise<{ success: boolean; fabrics?: FabricType[]; error?: string }> {
+     try {
+       const { data: fabrics, error } = await supabase
+         .from('fabric_types')
+         .select('*')
+         .eq('is_active', true)
+         .order('name');
+
+       if (error) throw error;
+
+       return { success: true, fabrics };
+     } catch (error: any) {
+       console.error('Get fabric types error:', error);
+       return { success: false, error: error.message };
+     }
+   }
+
+  /**
+   * Create a new fabric type
    */
-  static async getFabricTypes(): Promise<{ success: boolean; fabrics?: FabricType[]; error?: string }> {
+  static async createFabricType(fabricData: {
+    name: string;
+    description?: string;
+    material_composition: string;
+    care_instructions: string;
+    price_per_meter: number;
+    is_active: boolean;
+  }): Promise<{ success: boolean; fabric?: FabricType; error?: string }> {
     try {
-      const { data: fabrics, error } = await supabase
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        return { success: false, error: 'User not authenticated' };
+      }
+
+      // Check admin permissions
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+
+      if (!['admin', 'shop_owner'].includes(profile?.role)) {
+        return { success: false, error: 'Unauthorized to create fabric types' };
+      }
+
+      const { data: fabric, error } = await supabase
         .from('fabric_types')
-        .select('*')
-        .eq('is_active', true)
-        .order('name');
+        .insert(fabricData)
+        .select()
+        .single();
 
       if (error) throw error;
 
-      return { success: true, fabrics };
+      return { success: true, fabric };
     } catch (error: any) {
-      console.error('Get fabric types error:', error);
+      console.error('Create fabric type error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Update a fabric type
+   */
+  static async updateFabricType(
+    fabricId: string,
+    fabricData: {
+      name: string;
+      description?: string;
+      material_composition: string;
+      care_instructions: string;
+      price_per_meter: number;
+      is_active: boolean;
+    }
+  ): Promise<{ success: boolean; fabric?: FabricType; error?: string }> {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        return { success: false, error: 'User not authenticated' };
+      }
+
+      // Check admin permissions
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+
+      if (!['admin', 'shop_owner'].includes(profile?.role)) {
+        return { success: false, error: 'Unauthorized to update fabric types' };
+      }
+
+      const { data: fabric, error } = await supabase
+        .from('fabric_types')
+        .update(fabricData)
+        .eq('id', fabricId)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      return { success: true, fabric };
+    } catch (error: any) {
+      console.error('Update fabric type error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Delete a fabric type
+   */
+  static async deleteFabricType(fabricId: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        return { success: false, error: 'User not authenticated' };
+      }
+
+      // Check admin permissions
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+
+      if (!['admin', 'shop_owner'].includes(profile?.role)) {
+        return { success: false, error: 'Unauthorized to delete fabric types' };
+      }
+
+      const { error } = await supabase
+        .from('fabric_types')
+        .delete()
+        .eq('id', fabricId);
+
+      if (error) throw error;
+
+      return { success: true };
+    } catch (error: any) {
+      console.error('Delete fabric type error:', error);
       return { success: false, error: error.message };
     }
   }

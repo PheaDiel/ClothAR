@@ -192,8 +192,7 @@ export default function EditProfileScreen({ navigation }: EditProfileScreenProps
     }));
   };
 
-  const userAvatar = user?.avatar_url ||
-    (user?.email ? `https://i.pravatar.cc/150?img=3` : "https://i.pravatar.cc/150?img=1");
+  const userAvatar = user?.avatar_url || "https://cdn-icons-png.flaticon.com/512/8608/8608769.png";
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>

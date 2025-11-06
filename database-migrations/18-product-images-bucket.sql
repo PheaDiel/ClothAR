@@ -1,0 +1,111 @@
+-- Migration 18: Product Images Storage Bucket Setup
+-- MANUAL SETUP REQUIRED - Cannot run via SQL Editor due to permissions
+--
+-- IMPORTANT: This SQL cannot be executed directly in the SQL Editor due to permission restrictions.
+-- You must create the storage bucket manually through the Supabase Dashboard.
+--
+-- Steps to create the bucket manually:
+-- 1. Go to your Supabase Dashboard
+-- 2. Navigate to Storage
+-- 3. Click "Create bucket"
+-- 4. Set bucket name: "product-images"
+-- 5. Make it public
+-- 6. Set file size limit: 5MB
+-- 7. Allowed MIME types: image/jpeg, image/jpg, image/png, image/webp
+-- 8. Create the bucket
+-- 9. Go to Policies tab and create the policies listed below
+
+-- ============================================
+-- POLICIES TO CREATE MANUALLY IN SUPABASE DASHBOARD
+-- ============================================
+
+-- Policy 1: "Product images are publicly accessible"
+-- Type: SELECT
+-- Allowed operation: SELECT
+-- Policy definition: bucket_id = 'product-images'
+
+-- Policy 2: "Admins and shop owners can upload product images"
+-- Type: INSERT
+-- Allowed operation: INSERT
+-- Policy definition:
+-- bucket_id = 'product-images'
+-- AND EXISTS (
+--   SELECT 1 FROM public.profiles
+--   WHERE id = auth.uid()
+--   AND role IN ('admin', 'shop_owner')
+--   AND role_status = 'approved'
+-- )
+
+-- Policy 3: "Admins and shop owners can update product images"
+-- Type: UPDATE
+-- Allowed operation: UPDATE
+-- Policy definition:
+-- bucket_id = 'product-images'
+-- AND EXISTS (
+--   SELECT 1 FROM public.profiles
+--   WHERE id = auth.uid()
+--   AND role IN ('admin', 'shop_owner')
+--   AND role_status = 'approved'
+-- )
+
+-- Policy 4: "Admins and shop owners can delete product images"
+-- Type: DELETE
+-- Allowed operation: DELETE
+-- Policy definition:
+-- bucket_id = 'product-images'
+-- AND EXISTS (
+--   SELECT 1 FROM public.profiles
+--   WHERE id = auth.uid()
+--   AND role IN ('admin', 'shop_owner')
+--   AND role_status = 'approved'
+-- )
+
+-- ============================================
+-- ALTERNATIVE: If you have project owner access, this SQL would work:
+-- ============================================
+
+-- INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+-- VALUES (
+--   'product-images',
+--   'product-images',
+--   true,
+--   5242880, -- 5MB limit per file
+--   ARRAY['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
+-- )
+-- ON CONFLICT (id) DO NOTHING;
+--
+-- CREATE POLICY "Product images are publicly accessible" ON storage.objects
+--   FOR SELECT USING (bucket_id = 'product-images');
+--
+-- CREATE POLICY "Admins and shop owners can upload product images" ON storage.objects
+--   FOR INSERT WITH CHECK (
+--     bucket_id = 'product-images'
+--     AND EXISTS (
+--       SELECT 1 FROM public.profiles
+--       WHERE id = auth.uid()
+--       AND role IN ('admin', 'shop_owner')
+--       AND role_status = 'approved'
+--     )
+--   );
+--
+-- CREATE POLICY "Admins and shop owners can update product images" ON storage.objects
+--   FOR UPDATE USING (
+--     bucket_id = 'product-images'
+--     AND EXISTS (
+--       SELECT 1 FROM public.profiles
+--       WHERE id = auth.uid()
+--       AND role IN ('admin', 'shop_owner')
+--       AND role_status = 'approved'
+--     )
+--   );
+--
+-- CREATE POLICY "Admins and shop owners can delete product images" ON storage.objects
+--   FOR DELETE USING (
+--     bucket_id = 'product-images'
+--     AND EXISTS (
+--       SELECT 1 FROM public.profiles
+--       WHERE id = auth.uid()
+--       AND role IN ('admin', 'shop_owner')
+--       AND role_status = 'approved'
+--     )
+--   );

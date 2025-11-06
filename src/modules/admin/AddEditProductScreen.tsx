@@ -17,6 +17,7 @@ import { hp, wp, rf } from '../../utils/responsiveUtils';
 import Loading from '../../components/Loading';
 import { StorageService } from '../../services/storageService';
 import { ProductService } from '../../services/productService';
+import * as ImageManipulator from 'expo-image-manipulator';
 
 interface Product {
   id?: string;
@@ -39,6 +40,9 @@ const AddEditProductScreen = () => {
   const [uploadingImages, setUploadingImages] = useState(false);
   const [imagePickerVisible, setImagePickerVisible] = useState(false);
   const [currentImageType, setCurrentImageType] = useState<'product' | 'virtual'>('product');
+  const [imageScale, setImageScale] = useState(1);
+  const [showScaleModal, setShowScaleModal] = useState(false);
+  const [scalingImage, setScalingImage] = useState<string | null>(null);
 
   const [productData, setProductData] = useState<Product>({
     name: '',
@@ -52,17 +56,31 @@ const AddEditProductScreen = () => {
   });
 
   const categories = ['shirt', 'pants', 'dress', 'jacket', 'skirt', 'blouse'];
-  const availableFabrics = [
-    { id: '1', name: 'Premium Cotton' },
-    { id: '2', name: 'Italian Wool' },
-    { id: '3', name: 'Silk Blend' },
-  ];
+  const [availableFabrics, setAvailableFabrics] = useState<{ id: string; name: string }[]>([]);
 
   useEffect(() => {
     if (product) {
       setProductData(product);
     }
   }, [product]);
+
+  useEffect(() => {
+    loadFabrics();
+  }, []);
+
+  const loadFabrics = async () => {
+    try {
+      const result = await ProductService.getFabricTypes();
+      if (result.success && result.fabrics) {
+        setAvailableFabrics(result.fabrics.map(fabric => ({
+          id: fabric.id,
+          name: fabric.name
+        })));
+      }
+    } catch (error) {
+      console.error('Error loading fabrics:', error);
+    }
+  };
 
   const handleSave = async () => {
     if (!productData.name || !productData.description || !productData.category) {
@@ -103,29 +121,68 @@ const AddEditProductScreen = () => {
 
   const handleImagePickerSelection = async (source: 'camera' | 'library') => {
     try {
+      console.log('🔄 AddEditProductScreen: Starting image picker process...');
+      console.log('📷 Source:', source, 'Type:', currentImageType);
+
+      // First, test connectivity before attempting upload
+      console.log('🔄 AddEditProductScreen: Testing connectivity...');
+      const connectivityTest = await StorageService.testConnectivity();
+      if (!connectivityTest.success) {
+        console.error('❌ Connectivity test failed:', connectivityTest);
+        Alert.alert(
+          'Connection Error',
+          `Unable to connect to server: ${connectivityTest.error}. Please check your internet connection and try again.`,
+          [{ text: 'OK' }]
+        );
+        setImagePickerVisible(false);
+        return;
+      }
+      console.log('✅ Connectivity test passed');
+
       setImagePickerVisible(false);
       setUploadingImages(true);
 
       let result;
       const options = StorageService.getImagePickerOptions(currentImageType === 'virtual');
+      console.log('⚙️ Image picker options:', options);
 
       if (source === 'camera') {
+        console.log('📷 Opening camera...');
         result = await StorageService.pickFromCamera(options);
       } else {
+        console.log('🖼️ Opening image library...');
         result = await StorageService.pickFromLibrary(options);
       }
 
+      console.log('📸 Image picker result:', {
+        canceled: result.canceled,
+        assetsCount: result.assets?.length
+      });
+
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const selectedImage = result.assets[0];
+        console.log('🖼️ Selected image:', {
+          uri: selectedImage.uri,
+          width: selectedImage.width,
+          height: selectedImage.height,
+          fileSize: selectedImage.fileSize
+        });
 
         // Upload the image
+        const folder = currentImageType === 'virtual' ? 'virtual-tryon' : 'products';
+        console.log('☁️ Starting upload to folder:', folder);
+
         const uploadResult = await StorageService.uploadImage(
           selectedImage.uri,
           `image_${Date.now()}.jpg`,
-          currentImageType === 'virtual' ? 'virtual-tryon' : 'products'
+          folder
         );
 
+        console.log('☁️ Upload result:', uploadResult);
+
         if (uploadResult.success && uploadResult.url) {
+          console.log('✅ Upload successful, URL:', uploadResult.url);
+
           if (currentImageType === 'virtual') {
             setProductData(prev => ({
               ...prev,
@@ -137,15 +194,76 @@ const AddEditProductScreen = () => {
               images: [...prev.images, uploadResult.url!],
             }));
           }
+          Alert.alert('Success', 'Image uploaded successfully');
         } else {
-          Alert.alert('Upload Failed', uploadResult.error || 'Failed to upload image');
+          console.error('❌ Upload failed:', uploadResult.error);
+
+          // Provide more specific error messages to user
+          let errorMessage = 'Failed to upload image. ';
+          if (uploadResult.error?.includes('Network request failed') || uploadResult.error?.includes('timeout')) {
+            errorMessage += 'Please check your internet connection and try again.';
+          } else if (uploadResult.error?.includes('Authentication error')) {
+            errorMessage += 'Please log out and log back in.';
+          } else if (uploadResult.error?.includes('Permission denied')) {
+            errorMessage += 'You do not have permission to upload images.';
+          } else if (uploadResult.error?.includes('Storage configuration')) {
+            errorMessage += 'Storage service is not properly configured.';
+          } else {
+            errorMessage += uploadResult.error || 'Please try again.';
+          }
+
+          Alert.alert('Upload Failed', errorMessage);
         }
+      } else {
+        console.log('❌ Image picker canceled or no assets');
       }
     } catch (error: any) {
-      console.error('Image picker error:', error);
+      console.error('❌ Image picker error:', error);
+      console.error('❌ Error details:', {
+        message: error.message,
+        stack: error.stack,
+        name: error.name
+      });
       Alert.alert('Error', error.message || 'Failed to pick image');
     } finally {
       setUploadingImages(false);
+    }
+  };
+
+  const scaleImage = async (imageUri: string) => {
+    try {
+      setScalingImage(imageUri);
+      const scaledImage = await ImageManipulator.manipulateAsync(
+        imageUri,
+        [{ resize: { width: 800 * imageScale, height: 800 * imageScale } }],
+        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
+      );
+
+      // Replace the image in the state
+      const isVirtual = productData.virtual_tryon_images.includes(imageUri);
+      if (isVirtual) {
+        setProductData(prev => ({
+          ...prev,
+          virtual_tryon_images: prev.virtual_tryon_images.map(img =>
+            img === imageUri ? scaledImage.uri : img
+          ),
+        }));
+      } else {
+        setProductData(prev => ({
+          ...prev,
+          images: prev.images.map(img =>
+            img === imageUri ? scaledImage.uri : img
+          ),
+        }));
+      }
+
+      setShowScaleModal(false);
+      setScalingImage(null);
+      Alert.alert('Success', 'Image scaled successfully');
+    } catch (error) {
+      console.error('Scale image error:', error);
+      Alert.alert('Error', 'Failed to scale image');
+      setScalingImage(null);
     }
   };
 
@@ -262,6 +380,58 @@ const AddEditProductScreen = () => {
         </Modal>
       </Portal>
 
+      {/* Image Scale Modal */}
+      <Portal>
+        <Modal
+          visible={showScaleModal}
+          onDismiss={() => setShowScaleModal(false)}
+          contentContainerStyle={styles.modalContainer}
+        >
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Scale Image</Text>
+            <Text style={styles.modalSubtitle}>
+              Adjust the scale factor for the image
+            </Text>
+
+            <View style={styles.scaleContainer}>
+              <TouchableOpacity
+                style={styles.scaleButtonControl}
+                onPress={() => setImageScale(Math.max(0.1, imageScale - 0.1))}
+              >
+                <Ionicons name="remove" size={24} color={theme.colors.primary} />
+              </TouchableOpacity>
+
+              <Text style={styles.scaleText}>{imageScale.toFixed(1)}x</Text>
+
+              <TouchableOpacity
+                style={styles.scaleButtonControl}
+                onPress={() => setImageScale(Math.min(3.0, imageScale + 0.1))}
+              >
+                <Ionicons name="add" size={24} color={theme.colors.primary} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.scaleActions}>
+              <Button
+                mode="outlined"
+                onPress={() => setShowScaleModal(false)}
+                style={styles.scaleCancelButton}
+              >
+                Cancel
+              </Button>
+              <Button
+                mode="contained"
+                onPress={() => scalingImage && scaleImage(scalingImage)}
+                style={styles.scaleApplyButton}
+                loading={scalingImage !== null}
+              >
+                Apply Scale
+              </Button>
+            </View>
+          </View>
+        </Modal>
+      </Portal>
+
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         {/* Header */}
         <View style={styles.header}>
@@ -337,12 +507,23 @@ const AddEditProductScreen = () => {
               {productData.images.map((image, index) => (
                 <View key={index} style={styles.imageWrapper}>
                   <Image source={{ uri: image }} style={styles.image} />
-                  <TouchableOpacity
-                    style={styles.removeImageButton}
-                    onPress={() => removeImage(index)}
-                  >
-                    <Ionicons name="close-circle" size={24} color={theme.colors.danger} />
-                  </TouchableOpacity>
+                  <View style={styles.imageControls}>
+                    <TouchableOpacity
+                      style={styles.scaleButton}
+                      onPress={() => {
+                        setScalingImage(image);
+                        setShowScaleModal(true);
+                      }}
+                    >
+                      <Ionicons name="resize" size={16} color={theme.colors.primary} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.removeImageButton}
+                      onPress={() => removeImage(index)}
+                    >
+                      <Ionicons name="close-circle" size={20} color={theme.colors.danger} />
+                    </TouchableOpacity>
+                  </View>
                 </View>
               ))}
             </View>
@@ -370,12 +551,23 @@ const AddEditProductScreen = () => {
               {productData.virtual_tryon_images.map((image, index) => (
                 <View key={index} style={styles.imageWrapper}>
                   <Image source={{ uri: image }} style={styles.image} />
-                  <TouchableOpacity
-                    style={styles.removeImageButton}
-                    onPress={() => removeImage(index, true)}
-                  >
-                    <Ionicons name="close-circle" size={24} color={theme.colors.danger} />
-                  </TouchableOpacity>
+                  <View style={styles.imageControls}>
+                    <TouchableOpacity
+                      style={styles.scaleButton}
+                      onPress={() => {
+                        setScalingImage(image);
+                        setShowScaleModal(true);
+                      }}
+                    >
+                      <Ionicons name="resize" size={16} color={theme.colors.primary} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.removeImageButton}
+                      onPress={() => removeImage(index, true)}
+                    >
+                      <Ionicons name="close-circle" size={20} color={theme.colors.danger} />
+                    </TouchableOpacity>
+                  </View>
                 </View>
               ))}
             </View>
@@ -587,6 +779,51 @@ const styles = StyleSheet.create({
   modalCancelButton: {
     marginTop: hp(2),
     width: '100%',
+  },
+  imageControls: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+    flexDirection: 'row',
+    gap: wp(1),
+  },
+  scaleButton: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: wp(6),
+    padding: wp(1),
+    elevation: 2,
+  },
+  scaleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: hp(3),
+    gap: wp(4),
+  },
+  scaleButtonControl: {
+    backgroundColor: theme.colors.background,
+    borderRadius: wp(6),
+    padding: wp(2),
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  scaleText: {
+    fontSize: rf(18),
+    fontWeight: 'bold',
+    color: theme.colors.textPrimary,
+    minWidth: wp(15),
+    textAlign: 'center',
+  },
+  scaleActions: {
+    flexDirection: 'row',
+    gap: wp(3),
+    marginTop: hp(2),
+  },
+  scaleCancelButton: {
+    flex: 1,
+  },
+  scaleApplyButton: {
+    flex: 1,
   },
 });
 

@@ -188,6 +188,7 @@ export default function RegistrationFlow() {
           city_code: registrationData.city?.code,
           city_name: registrationData.city?.name,
           barangay: registrationData.barangay || undefined,
+          avatar_url: "https://cdn-icons-png.flaticon.com/512/8608/8608769.png",
           profileComplete: true,
         });
 

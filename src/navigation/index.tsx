@@ -187,8 +187,8 @@ export default function RootNavigation() {
     setOnboardingCompleted(true);
   };
 
-  // Show loading screen while initializing
-  if (initializing) {
+  // Show loading screen while initializing or auth is loading
+  if (initializing || isLoading) {
     return <Loading />;
   }
 

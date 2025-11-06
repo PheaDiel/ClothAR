@@ -55,6 +55,8 @@ export class CartService {
         return { success: false, error: cartResult.error };
       }
 
+      console.log('Get cart items: Fetching cart items for cart_id:', cartResult.cart.id);
+
       const { data: items, error } = await supabase
         .from('cart_items')
         .select(`
@@ -96,7 +98,12 @@ export class CartService {
         .eq('cart_id', cartResult.cart.id)
         .order('created_at', { ascending: false });
 
-      if (error) throw error;
+      if (error) {
+        console.error('Get cart items error:', error);
+        throw error;
+      }
+
+      console.log('Get cart items: Retrieved items:', items?.length || 0);
 
       // Transform data to match CartItem interface
       const transformedItems: CartItem[] = (items || []).map(item => ({

@@ -127,9 +127,7 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
   const isGuest = user?.id === 'guest';
   const userName = isGuest ? "Guest User" : (user?.name || "User");
   const userEmail = isGuest ? "guest@local" : (user?.email || "user@example.com");
-  const userAvatar = isGuest
-    ? "https://cdn.vectorstock.com/i/1000v/28/66/gray-profile-silhouette-avatar-vector-21542866.jpg"
-    : (user?.avatar_url || (user?.email ? `https://i.pravatar.cc/150?u=${user.email}` : "https://i.pravatar.cc/150?img=1"));
+  const userAvatar = user?.avatar_url || "https://cdn-icons-png.flaticon.com/512/8608/8608769.png";
 
   const needsVerification = user && !isGuest && user.verification_status !== 'verified';
 

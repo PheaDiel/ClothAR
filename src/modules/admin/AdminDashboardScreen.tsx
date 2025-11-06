@@ -15,44 +15,11 @@ import { AuthContext } from '../../context/AuthContext';
 import { hp, wp, rf } from '../../utils/responsiveUtils';
 import Loading from '../../components/Loading';
 
-interface DashboardStats {
-  totalUsers: number;
-  totalOrders: number;
-  pendingOrders: number;
-  totalProducts: number;
-  lowStockItems: number;
-  totalRevenue: number;
-}
 
 const AdminDashboardScreen = () => {
   const navigation = useNavigation();
   const { user } = useContext(AuthContext);
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadDashboardStats();
-  }, []);
-
-  const loadDashboardStats = async () => {
-    try {
-      // Mock data - replace with actual API calls
-      const mockStats: DashboardStats = {
-        totalUsers: 1250,
-        totalOrders: 456,
-        pendingOrders: 23,
-        totalProducts: 89,
-        lowStockItems: 12,
-        totalRevenue: 125000,
-      };
-      setStats(mockStats);
-    } catch (error) {
-      console.error('Error loading dashboard stats:', error);
-      Alert.alert('Error', 'Failed to load dashboard statistics');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const adminMenuItems = [
     {
@@ -92,48 +59,7 @@ const AdminDashboardScreen = () => {
     },
   ];
 
-  const statCards = [
-    {
-      title: 'Total Users',
-      value: stats?.totalUsers || 0,
-      icon: 'people',
-      color: theme.colors.primary,
-    },
-    {
-      title: 'Total Orders',
-      value: stats?.totalOrders || 0,
-      icon: 'receipt',
-      color: theme.colors.secondary,
-    },
-    {
-      title: 'Pending Orders',
-      value: stats?.pendingOrders || 0,
-      icon: 'time',
-      color: theme.colors.warning,
-    },
-    {
-      title: 'Total Products',
-      value: stats?.totalProducts || 0,
-      icon: 'cube',
-      color: theme.colors.tertiary,
-    },
-    {
-      title: 'Low Stock Items',
-      value: stats?.lowStockItems || 0,
-      icon: 'warning',
-      color: theme.colors.danger,
-    },
-    {
-      title: 'Total Revenue',
-      value: `₱${(stats?.totalRevenue || 0).toLocaleString()}`,
-      icon: 'cash',
-      color: theme.colors.success,
-    },
-  ];
 
-  if (loading) {
-    return <Loading />;
-  }
 
   return (
     <View style={styles.container}>
@@ -145,29 +71,6 @@ const AdminDashboardScreen = () => {
           <Text style={styles.adminRole}>System Administrator</Text>
         </View>
 
-        {/* Statistics Grid */}
-        <View style={styles.statsContainer}>
-          <Text style={styles.sectionTitle}>Dashboard Overview</Text>
-          <View style={styles.statsGrid}>
-            {statCards.map((stat, index) => (
-              <Card key={index} style={styles.statCard}>
-                <Card.Content style={styles.statCardContent}>
-                  <View style={styles.statIconContainer}>
-                    <Ionicons
-                      name={stat.icon as keyof typeof Ionicons.glyphMap}
-                      size={24}
-                      color={stat.color}
-                    />
-                  </View>
-                  <View style={styles.statTextContainer}>
-                    <Text style={styles.statValue}>{stat.value}</Text>
-                    <Text style={styles.statTitle}>{stat.title}</Text>
-                  </View>
-                </Card.Content>
-              </Card>
-            ))}
-          </View>
-        </View>
 
         {/* Admin Functions */}
         <View style={styles.menuContainer}>
@@ -253,45 +156,6 @@ const styles = StyleSheet.create({
     color: theme.colors.textPrimary,
     marginBottom: hp(2),
     marginTop: hp(2),
-  },
-  statsContainer: {
-    paddingHorizontal: wp(5),
-  },
-  statsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-  },
-  statCard: {
-    width: wp(43),
-    marginBottom: hp(2),
-    elevation: 2,
-  },
-  statCardContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  statIconContainer: {
-    width: wp(12),
-    height: wp(12),
-    borderRadius: wp(6),
-    backgroundColor: theme.colors.surface,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: wp(3),
-  },
-  statTextContainer: {
-    flex: 1,
-  },
-  statValue: {
-    fontSize: rf(20),
-    fontWeight: 'bold',
-    color: theme.colors.textPrimary,
-  },
-  statTitle: {
-    fontSize: rf(12),
-    color: theme.colors.textLight,
-    marginTop: hp(0.5),
   },
   menuContainer: {
     paddingHorizontal: wp(5),

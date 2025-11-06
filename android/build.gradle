@@ -3,6 +3,9 @@
 // Override NDK version to use the working installation
 project.ext.ndkVersion = "27.0.12077973"
 
+// Set minimum SDK version to 26 to support react-native-vision-camera-face-detector
+project.ext.minSdkVersion = 26
+
 buildscript {
   repositories {
     google()

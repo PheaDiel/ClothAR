@@ -47,18 +47,29 @@ const CustomerManagementScreen = () => {
     loadChatConversations();
   }, []);
 
+  // Add loading state management
+  useEffect(() => {
+    if (customers.length > 0) {
+      setLoading(false);
+    }
+  }, [customers]);
+
   useEffect(() => {
     filterCustomers();
   }, [customers, searchQuery, roleFilter]);
 
   const loadCustomers = async () => {
     try {
+      console.log('Starting to load customers...');
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
+        console.log('No authenticated user found');
         Alert.alert('Error', 'User not authenticated');
+        setLoading(false);
         return;
       }
 
+      console.log('Checking admin permissions...');
       // Check if user is admin
       const { data: profile } = await supabase
         .from('profiles')
@@ -67,55 +78,81 @@ const CustomerManagementScreen = () => {
         .single();
 
       if (!['admin'].includes(profile?.role)) {
+        console.log('User is not admin:', profile?.role);
         Alert.alert('Error', 'Unauthorized to view customers. Admin access required.');
+        setLoading(false);
         return;
       }
 
-      // Load all customers with order statistics
+      console.log('Loading customer profiles...');
+      // Load all customers
       const { data: customersData, error } = await supabase
         .from('profiles')
-        .select(`
-          *,
-          orders (
-            id,
-            total_amount,
-            created_at,
-            status
-          )
-        `)
+        .select('*')
         .order('created_at', { ascending: false });
 
-      if (error) throw error;
+      if (error) {
+        console.error('Error fetching profiles:', error);
+        throw error;
+      }
 
-      // Transform data to match interface
-      const transformedCustomers: Customer[] = (customersData || []).map((customer: any) => {
-        const completedOrders = customer.orders?.filter((order: any) =>
-          ['delivered', 'shipped'].includes(order.status)
-        ) || [];
+      console.log('Found', customersData?.length || 0, 'customers');
 
-        const lastOrder = completedOrders.length > 0 ?
-          completedOrders.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0] : null;
+      // Fetch order statistics separately for each customer
+      const transformedCustomers: Customer[] = await Promise.all(
+        (customersData || []).map(async (customer: any) => {
+          let totalOrders = 0;
+          let totalSpent = 0;
+          let lastOrderDate: string | undefined;
 
-        return {
-          id: customer.id,
-          name: customer.name,
-          email: customer.email || '',
-          phone: customer.phone,
-          role: customer.role,
-          role_status: customer.role_status,
-          province_name: customer.province_name,
-          city_name: customer.city_name,
-          created_at: customer.created_at,
-          last_order_date: lastOrder?.created_at,
-          total_orders: completedOrders.length,
-          total_spent: completedOrders.reduce((sum: number, order: any) => sum + order.total_amount, 0),
-        };
-      });
+          try {
+            const { data: ordersData } = await supabase
+              .from('orders')
+              .select('id, total_amount, created_at, status')
+              .eq('user_id', customer.id);
 
+            const completedOrders = ordersData?.filter((order: any) =>
+              ['delivered', 'shipped'].includes(order.status)
+            ) || [];
+
+            totalOrders = completedOrders.length;
+            totalSpent = completedOrders.reduce((sum: number, order: any) => sum + order.total_amount, 0);
+
+            if (completedOrders.length > 0) {
+              const sortedOrders = completedOrders.sort((a: any, b: any) =>
+                new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+              );
+              lastOrderDate = sortedOrders[0].created_at;
+            }
+          } catch (ordersError) {
+            console.warn('Could not fetch orders for customer:', customer.id, ordersError);
+          }
+
+          return {
+            id: customer.id,
+            name: customer.name,
+            email: customer.email || '',
+            phone: customer.phone,
+            role: customer.role,
+            role_status: customer.role_status,
+            province_name: customer.province_name,
+            city_name: customer.city_name,
+            created_at: customer.created_at,
+            last_order_date: lastOrderDate,
+            total_orders: totalOrders,
+            total_spent: totalSpent,
+          };
+        })
+      );
+
+      console.log('Setting customers data:', transformedCustomers.length, 'customers');
       setCustomers(transformedCustomers);
     } catch (error) {
       console.error('Error loading customers:', error);
       Alert.alert('Error', 'Failed to load customers');
+    } finally {
+      console.log('Setting loading to false');
+      setLoading(false);
     }
   };
 
@@ -126,6 +163,7 @@ const CustomerManagementScreen = () => {
       setChatConversations(conversations);
     } catch (error) {
       console.error('Error loading chat conversations:', error);
+      // Don't show alert for chat loading errors, just log them
     }
   };
 

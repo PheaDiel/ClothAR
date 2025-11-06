@@ -70,15 +70,11 @@ const OrderManagementScreen = () => {
         return;
       }
 
-      // Load all orders with user details, prioritizing paid orders
+      // Load all orders, prioritizing paid orders
       const { data: ordersData, error } = await supabase
         .from('orders')
         .select(`
           *,
-          profiles:user_id (
-            name,
-            email
-          ),
           order_items (
             quantity
           )
@@ -88,20 +84,36 @@ const OrderManagementScreen = () => {
 
       if (error) throw error;
 
-      // Transform data to match interface
-      const transformedOrders: Order[] = (ordersData || []).map((order: any) => ({
-        id: order.id,
-        order_number: order.order_number,
-        user_id: order.user_id,
-        status: order.status,
-        total_amount: order.total_amount,
-        created_at: order.created_at,
-        user_name: order.profiles?.name || 'Unknown User',
-        item_count: order.order_items?.reduce((sum: number, item: any) => sum + item.quantity, 0) || 0,
-        payment_status: order.payment_status,
-        payment_method: order.payment_method,
-        requires_tailoring: order.requires_tailoring,
-      }));
+      // Fetch user profiles separately for each order
+      const transformedOrders: Order[] = await Promise.all(
+        (ordersData || []).map(async (order: any) => {
+          let userName = 'Unknown User';
+          try {
+            const { data: userProfile } = await supabase
+              .from('profiles')
+              .select('name')
+              .eq('id', order.user_id)
+              .single();
+            userName = userProfile?.name || 'Unknown User';
+          } catch (profileError) {
+            console.warn('Could not fetch profile for user:', order.user_id, profileError);
+          }
+
+          return {
+            id: order.id,
+            order_number: order.order_number,
+            user_id: order.user_id,
+            status: order.status,
+            total_amount: order.total_amount,
+            created_at: order.created_at,
+            user_name: userName,
+            item_count: order.order_items?.reduce((sum: number, item: any) => sum + item.quantity, 0) || 0,
+            payment_status: order.payment_status,
+            payment_method: order.payment_method,
+            requires_tailoring: order.requires_tailoring,
+          };
+        })
+      );
 
       setOrders(transformedOrders);
     } catch (error) {

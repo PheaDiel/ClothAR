@@ -14,26 +14,33 @@ import { OfflineIndicator } from './src/components/OfflineIndicator';
 import { theme, navigationTheme } from './src/theme/theme';
 
 export default function App() {
-  return (
-    <ErrorBoundary>
-      <NetworkProvider>
-        <ToastProvider>
-          <NotificationProvider>
-            <AuthProvider>
-              <InventoryProvider>
-                <CartProvider>
-                  <PaperProvider theme={theme}>
-                    <NavigationContainer theme={navigationTheme}>
-                      <OfflineIndicator />
-                      <RootNavigator />
-                    </NavigationContainer>
-                  </PaperProvider>
-                </CartProvider>
-              </InventoryProvider>
-            </AuthProvider>
-          </NotificationProvider>
-        </ToastProvider>
-      </NetworkProvider>
-    </ErrorBoundary>
-  );
+  console.log('🚀 App component rendering...');
+
+  try {
+    return (
+      <ErrorBoundary>
+        <NetworkProvider>
+          <ToastProvider>
+            <NotificationProvider>
+              <AuthProvider>
+                <InventoryProvider>
+                  <CartProvider>
+                    <PaperProvider theme={theme}>
+                      <NavigationContainer theme={navigationTheme}>
+                        <OfflineIndicator />
+                        <RootNavigator />
+                      </NavigationContainer>
+                    </PaperProvider>
+                  </CartProvider>
+                </InventoryProvider>
+              </AuthProvider>
+            </NotificationProvider>
+          </ToastProvider>
+        </NetworkProvider>
+      </ErrorBoundary>
+    );
+  } catch (error) {
+    console.error('❌ Fatal error in App component:', error);
+    throw error;
+  }
 }

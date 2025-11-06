@@ -12,6 +12,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { theme } from '../../theme/theme';
 import { hp, wp, rf } from '../../utils/responsiveUtils';
 import Loading from '../../components/Loading';
+import { ProductService } from '../../services/productService';
 
 interface FabricType {
   id?: string;
@@ -52,13 +53,24 @@ const AddEditFabricScreen = () => {
 
     setLoading(true);
     try {
-      // Mock save - replace with actual API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      let result;
+      if (fabric) {
+        // Update existing fabric
+        result = await ProductService.updateFabricType(fabric.id!, fabricData);
+      } else {
+        // Create new fabric
+        result = await ProductService.createFabricType(fabricData);
+      }
 
-      Alert.alert('Success', `Fabric ${fabric ? 'updated' : 'created'} successfully`);
-      navigation.goBack();
-    } catch (error) {
-      Alert.alert('Error', 'Failed to save fabric');
+      if (result.success) {
+        Alert.alert('Success', `Fabric ${fabric ? 'updated' : 'created'} successfully`);
+        navigation.goBack();
+      } else {
+        Alert.alert('Error', result.error || 'Failed to save fabric');
+      }
+    } catch (error: any) {
+      console.error('Save fabric error:', error);
+      Alert.alert('Error', error.message || 'Failed to save fabric');
     } finally {
       setLoading(false);
     }

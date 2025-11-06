@@ -80,7 +80,7 @@ const FabricManagementScreen = () => {
     (navigation as any).navigate('AddEditFabric', { fabric });
   };
 
-  const handleDeleteFabric = (fabric: FabricType) => {
+  const handleDeleteFabric = async (fabric: FabricType) => {
     Alert.alert(
       'Delete Fabric',
       `Are you sure you want to delete "${fabric.name}"?`,
@@ -89,20 +89,49 @@ const FabricManagementScreen = () => {
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: () => {
-            // Implement delete logic
-            setFabrics(fabrics.filter(f => f.id !== fabric.id));
+          onPress: async () => {
+            try {
+              const result = await ProductService.deleteFabricType(fabric.id);
+              if (result.success) {
+                setFabrics(fabrics.filter(f => f.id !== fabric.id));
+                Alert.alert('Success', 'Fabric deleted successfully');
+              } else {
+                Alert.alert('Error', result.error || 'Failed to delete fabric');
+              }
+            } catch (error: any) {
+              console.error('Delete fabric error:', error);
+              Alert.alert('Error', error.message || 'Failed to delete fabric');
+            }
           }
         }
       ]
     );
   };
 
-  const handleToggleActive = (fabric: FabricType) => {
-    const updatedFabrics = fabrics.map(f =>
-      f.id === fabric.id ? { ...f, is_active: !f.is_active } : f
-    );
-    setFabrics(updatedFabrics);
+  const handleToggleActive = async (fabric: FabricType) => {
+    try {
+      const updatedFabricData = {
+        name: fabric.name,
+        description: fabric.description || '',
+        material_composition: fabric.material_composition || '',
+        care_instructions: fabric.care_instructions || '',
+        price_per_meter: fabric.price_per_meter,
+        is_active: !fabric.is_active,
+      };
+      const result = await ProductService.updateFabricType(fabric.id, updatedFabricData);
+
+      if (result.success) {
+        const updatedFabrics = fabrics.map(f =>
+          f.id === fabric.id ? { ...f, is_active: !f.is_active } : f
+        );
+        setFabrics(updatedFabrics);
+      } else {
+        Alert.alert('Error', result.error || 'Failed to update fabric status');
+      }
+    } catch (error: any) {
+      console.error('Toggle active error:', error);
+      Alert.alert('Error', error.message || 'Failed to update fabric status');
+    }
   };
 
   const renderFabricItem = ({ item }: { item: FabricType }) => (

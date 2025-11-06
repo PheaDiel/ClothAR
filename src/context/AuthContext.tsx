@@ -32,26 +32,59 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const { showError } = useToast();
 
   useEffect(() => {
+    let mounted = true;
+
     (async () => {
       try {
         console.log('🔄 AuthContext: Loading initial session...');
-        const { data: { session } } = await supabase.auth.getSession();
+
+        // First, try to get session from Supabase
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+
+        if (sessionError) {
+          console.error('❌ AuthContext: Session error:', sessionError);
+        }
+
         console.log('🔄 AuthContext: Session loaded:', !!session);
 
-        if (session?.user) {
+        if (session?.user && mounted) {
           console.log('🔄 AuthContext: User found in session, fetching profile...');
-          const { data: profile, error: profileError } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', session.user.id)
-            .single();
 
-          if (profileError) {
-            console.error('❌ AuthContext: Profile fetch error:', profileError);
+          // Add retry logic for profile fetching
+          let profile = null;
+          const maxRetries = 3;
+          const retryDelay = 1000;
+
+          for (let attempt = 1; attempt <= maxRetries && mounted; attempt++) {
+            try {
+              const { data: fetchedProfile, error: profileError } = await supabase
+                .from('profiles')
+                .select('*')
+                .eq('id', session.user.id)
+                .single();
+
+              if (profileError) {
+                console.error(`❌ AuthContext: Profile fetch error (attempt ${attempt}):`, profileError);
+
+                if (attempt < maxRetries) {
+                  console.log(`⏳ Retrying profile fetch in ${retryDelay}ms...`);
+                  await new Promise(resolve => setTimeout(resolve, retryDelay));
+                  continue;
+                }
+              } else {
+                profile = fetchedProfile;
+                console.log('✅ AuthContext: Profile loaded successfully');
+                break;
+              }
+            } catch (error) {
+              console.error(`❌ AuthContext: Profile fetch exception (attempt ${attempt}):`, error);
+              if (attempt < maxRetries) {
+                await new Promise(resolve => setTimeout(resolve, retryDelay));
+              }
+            }
           }
 
-          if (profile) {
-            console.log('✅ AuthContext: Profile loaded successfully');
+          if (profile && mounted) {
             const user: User = {
               id: profile.id,
               name: profile.name,
@@ -73,45 +106,102 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             };
             setUser(user);
             console.log('✅ AuthContext: User state set:', user.id);
-          } else {
-            console.log('⚠️ AuthContext: No profile found for user');
+
+            // Store user data in AsyncStorage as backup
+            await save('@user', user);
+            await save('@lastLoginTime', new Date().toISOString());
+          } else if (mounted) {
+            console.log('⚠️ AuthContext: No profile found for user after retries');
+            // Clear any stale session if profile doesn't exist
+            await supabase.auth.signOut();
           }
-        } else {
-          console.log('🔄 AuthContext: No session found, checking old storage...');
-          // Fallback to old storage for migration
-          const oldUser = await load('@user', null);
-          if (oldUser) {
-            setUser(oldUser);
-            console.log('✅ AuthContext: Old user loaded from storage');
+        } else if (mounted) {
+          console.log('🔄 AuthContext: No session found, checking AsyncStorage backup...');
+
+          // Check AsyncStorage for persisted user data
+          const storedUser = await load('@user', null);
+          const lastLoginTime = await load('@lastLoginTime', null);
+
+          if (storedUser && lastLoginTime) {
+            const loginTime = new Date(lastLoginTime);
+            const now = new Date();
+            const hoursSinceLogin = (now.getTime() - loginTime.getTime()) / (1000 * 60 * 60);
+
+            // Only restore if login was within last 24 hours
+            if (hoursSinceLogin < 24) {
+              console.log('✅ AuthContext: Restoring user from AsyncStorage');
+              setUser(storedUser);
+
+              // Try to refresh the session in background
+              try {
+                const { data: { session: refreshedSession } } = await supabase.auth.refreshSession();
+                if (!refreshedSession) {
+                  console.log('⚠️ AuthContext: Could not refresh session, keeping stored user');
+                }
+              } catch (error) {
+                console.error('❌ AuthContext: Session refresh failed:', error);
+              }
+            } else {
+              console.log('🔄 AuthContext: Stored login too old, clearing...');
+              await save('@user', null);
+              await save('@lastLoginTime', null);
+            }
+          } else {
+            console.log('🔄 AuthContext: No stored user data found');
           }
         }
       } catch (error) {
         console.error('❌ AuthContext: Error loading user:', error);
       } finally {
-        setIsLoading(false);
-        console.log('✅ AuthContext: Loading complete');
+        if (mounted) {
+          setIsLoading(false);
+          console.log('✅ AuthContext: Loading complete');
+        }
       }
     })();
 
-    // Listen for auth changes
+    // Listen for auth changes with improved error handling
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         console.log('🔄 AuthContext: Auth state change:', event, !!session, session?.user?.id);
 
         if (event === 'SIGNED_IN' && session?.user) {
           console.log('🔄 AuthContext: User signed in, fetching profile...');
-          const { data: profile, error: profileError } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', session.user.id)
-            .single();
 
-          if (profileError) {
-            console.error('❌ AuthContext: Profile fetch error on sign in:', profileError);
+          // Add retry logic for profile fetching on sign in
+          let profile = null;
+          const maxRetries = 3;
+          const retryDelay = 1000;
+
+          for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+              const { data: fetchedProfile, error: profileError } = await supabase
+                .from('profiles')
+                .select('*')
+                .eq('id', session.user.id)
+                .single();
+
+              if (profileError) {
+                console.error(`❌ AuthContext: Profile fetch error on sign in (attempt ${attempt}):`, profileError);
+
+                if (attempt < maxRetries) {
+                  await new Promise(resolve => setTimeout(resolve, retryDelay));
+                  continue;
+                }
+              } else {
+                profile = fetchedProfile;
+                console.log('✅ AuthContext: Profile loaded on sign in');
+                break;
+              }
+            } catch (error) {
+              console.error(`❌ AuthContext: Profile fetch exception on sign in (attempt ${attempt}):`, error);
+              if (attempt < maxRetries) {
+                await new Promise(resolve => setTimeout(resolve, retryDelay));
+              }
+            }
           }
 
           if (profile) {
-            console.log('✅ AuthContext: Profile loaded on sign in');
             const user: User = {
               id: profile.id,
               name: profile.name,
@@ -133,17 +223,32 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             };
             setUser(user);
             console.log('✅ AuthContext: User state updated on sign in:', user.id);
+
+            // Store user data in AsyncStorage
+            await save('@user', user);
+            await save('@lastLoginTime', new Date().toISOString());
           } else {
             console.log('⚠️ AuthContext: No profile found on sign in');
+            // Sign out if no profile exists
+            await supabase.auth.signOut();
           }
         } else if (event === 'SIGNED_OUT') {
           console.log('🔄 AuthContext: User signed out');
           setUser(null);
+
+          // Clear stored user data
+          await save('@user', null);
+          await save('@lastLoginTime', null);
+        } else if (event === 'TOKEN_REFRESHED') {
+          console.log('🔄 AuthContext: Token refreshed successfully');
         }
       }
     );
 
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const login = async (email: string, password: string) => {
@@ -341,7 +446,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
     console.log('🔄 AuthContext: Setting user to null');
     setUser(null);
-    console.log('✅ AuthContext: User state set to null');
+
+    // Clear stored user data
+    await save('@user', null);
+    await save('@lastLoginTime', null);
+
+    console.log('✅ AuthContext: User state set to null and storage cleared');
   };
 
   const proceedAsGuest = async () => {

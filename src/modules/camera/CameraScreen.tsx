@@ -16,6 +16,8 @@ import Animated, {
 } from 'react-native-reanimated';
 import { PanGestureHandler, TapGestureHandler } from 'react-native-gesture-handler';
 import { isARSupported, detectBodyPose, renderClothingOverlay, ClothingOverlay, initializeAR, BodyLandmarks, setPoseStabilityConfig, setPerspectiveCorrectionConfig, setMeasurementIntegrationConfig, setPhysicsConfig, addClothingLayer, removeClothingLayer, updateClothingLayers, ClothingLayer, physicsConfig } from '../../utils/arUtils';
+import { useNativePoseDetection, NativePose, performanceMonitor } from '../../utils/nativePoseDetection';
+import { adaptiveFrameRateManager, deviceCapabilityDetector } from '../../utils/mobileOptimization';
 import { ProductService } from '../../services/productService';
 import { MeasurementService } from '../../services/measurementService';
 import { wp, hp, rf, rw, rh } from '../../utils/responsiveUtils';
@@ -55,6 +57,10 @@ export default function CameraScreen() {
   });
   const [userMeasurements, setUserMeasurements] = useState<any>(null);
   const [measurementIntegrationStatus, setMeasurementIntegrationStatus] = useState<'loading' | 'loaded' | 'error' | 'none'>('none');
+  const [nativePose, setNativePose] = useState<NativePose | null>(null);
+  const [useNativePoseDetection, setUseNativePoseDetection] = useState(false);
+  const [deviceCapabilities, setDeviceCapabilities] = useState<any>(null);
+  const [adaptiveFrameRate, setAdaptiveFrameRate] = useState(30);
 
   // Animation values
   const controlsVisible = useSharedValue(1);
@@ -155,6 +161,11 @@ export default function CameraScreen() {
         // Load user measurements for AR integration
         loadUserMeasurements();
 
+        // Detect device capabilities for adaptive performance
+        const capabilities = await deviceCapabilityDetector.detectCapabilities();
+        setDeviceCapabilities(capabilities);
+        console.log('📱 Device capabilities detected:', capabilities);
+
         // Configure enhanced AR features
         setPoseStabilityConfig({
           smoothingFactor: 0.7,
@@ -254,44 +265,65 @@ export default function CameraScreen() {
     }
   };
 
-  // Function to start real-time frame processing
+  // Optimized function to start real-time frame processing with adaptive intervals
   const startFrameProcessing = () => {
     if (frameProcessingTimer.current) {
       clearInterval(frameProcessingTimer.current);
     }
 
-    frameProcessingTimer.current = setInterval(async () => {
+    // Initialize adaptive frame rate manager
+    adaptiveFrameRateManager.reset();
+
+    const processFrame = async () => {
       if (!isProcessingFrame && cameraRef.current && isARMode && arSettings.enableRealTimePose) {
+        const startTime = Date.now();
         await processCameraFrame();
+        const processingTime = Date.now() - startTime;
+
+        // Update adaptive frame rate manager
+        const newFrameRate = adaptiveFrameRateManager.updateFrameRate(processingTime);
+        setAdaptiveFrameRate(newFrameRate);
+
+        // Update performance monitor
+        performanceMonitor.recordFrame(processingTime);
       }
-    }, 500); // Slower interval for smoother demo performance
+    };
+
+    // Start with adaptive frame rate
+    const initialInterval = adaptiveFrameRateManager.getFrameInterval();
+    frameProcessingTimer.current = setInterval(processFrame, initialInterval);
+
+    // Update interval dynamically based on performance
+    const adaptiveIntervalTimer = setInterval(() => {
+      if (frameProcessingTimer.current) {
+        clearInterval(frameProcessingTimer.current);
+        const adaptiveInterval = adaptiveFrameRateManager.getFrameInterval();
+        frameProcessingTimer.current = setInterval(processFrame, adaptiveInterval);
+      }
+    }, 2000); // Check every 2 seconds
+
+    // Store adaptive timer for cleanup
+    (frameProcessingTimer as any).adaptiveTimer = adaptiveIntervalTimer;
   };
 
-  // Function to process camera frame for pose detection
+  // Optimized function to process camera frame for pose detection
   const processCameraFrame = async () => {
     if (isProcessingFrame) return;
 
-    console.log('🔍 DEBUG: processCameraFrame called');
     setIsProcessingFrame(true);
     const startTime = Date.now();
 
     try {
-      console.log('🔍 DEBUG: Taking picture from camera...');
-      // Capture frame from camera (using takePictureAsync for processing)
+      // Use optimized photo capture settings for better performance
       const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.3, // Lower quality for faster processing while maintaining accuracy
+        quality: 0.1, // Further reduced quality for faster processing
         base64: false,
         exif: false,
+        skipProcessing: true, // Skip additional processing for speed
       });
-      console.log('🔍 DEBUG: Photo captured, URI:', photo.uri);
 
-      console.log('🔍 DEBUG: Processing captured frame for pose detection...');
       // Process the captured frame for pose detection
       const poseResult = await detectBodyPose(photo.uri);
-      console.log('🔍 DEBUG: Pose detection completed, landmarks count:', Object.keys(poseResult.landmarks).length);
-
-      // Enhanced pose processing is now handled in arUtils.ts
-      // The pose state is updated there with advanced stability features
 
       // Update overlay if clothing is selected (single layer mode)
       if (selectedClothing && !multiLayerMode) {
@@ -320,7 +352,7 @@ export default function CameraScreen() {
         setClothingLayers(updatedLayers);
       }
 
-      // Update performance metrics
+      // Update performance metrics with optimized calculation
       const processingTime = Date.now() - startTime;
       frameCount.current++;
       const currentTime = Date.now();
@@ -338,13 +370,9 @@ export default function CameraScreen() {
       }
 
     } catch (error) {
-      console.error('🔍 DEBUG: Error processing camera frame:', error);
-      console.error('🔍 DEBUG: Error type:', error instanceof Error ? error.constructor.name : typeof error);
-      console.error('🔍 DEBUG: Error message:', error instanceof Error ? error.message : String(error));
-      console.error('🔍 DEBUG: Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+      console.error('Error processing camera frame:', error);
       setPoseDetectionError('Failed to process camera frame');
     } finally {
-      console.log('🔍 DEBUG: processCameraFrame completed');
       setIsProcessingFrame(false);
     }
   };
@@ -494,30 +522,35 @@ export default function CameraScreen() {
     transform: [{ translateY: settingsPanelY.value }]
   }));
 
-  // Initialize body pose detection when AR mode is enabled
+  // Initialize pose detection based on selected method
   useEffect(() => {
-    console.log('🔍 DEBUG: AR initialization useEffect triggered');
-    console.log('🔍 DEBUG: isARMode:', isARMode, 'cameraReady:', cameraReady);
+    console.log('🔍 DEBUG: Pose detection initialization useEffect triggered');
+    console.log('🔍 DEBUG: isARMode:', isARMode, 'cameraReady:', cameraReady, 'useNativePoseDetection:', useNativePoseDetection);
 
     if (isARMode && cameraReady) {
-      const initializePoseDetection = async () => {
-        try {
-          console.log('🔍 DEBUG: Initializing AR pose detection...');
-          // Initialize ML pose detection
-          await initializeAR();
-          console.log('🔍 DEBUG: AR pose detection initialized successfully');
+      if (useNativePoseDetection) {
+        // Native pose detection is handled by the hook
+        console.log('🔍 DEBUG: Using native pose detection');
+      } else {
+        // Fallback to TensorFlow.js method
+        const initializePoseDetection = async () => {
+          try {
+            console.log('🔍 DEBUG: Initializing TensorFlow.js pose detection...');
+            await initializeAR();
+            console.log('🔍 DEBUG: TensorFlow.js pose detection initialized successfully');
 
-          // Start frame processing if real-time pose is enabled
-          if (arSettings.enableRealTimePose) {
-            console.log('🔍 DEBUG: Starting frame processing...');
-            startFrameProcessing();
+            // Start frame processing if real-time pose is enabled
+            if (arSettings.enableRealTimePose) {
+              console.log('🔍 DEBUG: Starting frame processing...');
+              startFrameProcessing();
+            }
+          } catch (error) {
+            console.error('🔍 DEBUG: Error initializing pose detection:', error);
+            console.error('🔍 DEBUG: Error details:', error instanceof Error ? error.message : String(error));
           }
-        } catch (error) {
-          console.error('🔍 DEBUG: Error initializing pose detection:', error);
-          console.error('🔍 DEBUG: Error details:', error instanceof Error ? error.message : String(error));
-        }
-      };
-      initializePoseDetection();
+        };
+        initializePoseDetection();
+      }
     } else {
       console.log('🔍 DEBUG: Stopping frame processing (AR mode disabled or camera not ready)');
       // Stop frame processing when AR mode is disabled or real-time pose is disabled
@@ -531,9 +564,13 @@ export default function CameraScreen() {
       console.log('🔍 DEBUG: Cleanup: clearing frame processing timer');
       if (frameProcessingTimer.current) {
         clearInterval(frameProcessingTimer.current);
+        // Clear adaptive timer if exists
+        if ((frameProcessingTimer as any).adaptiveTimer) {
+          clearInterval((frameProcessingTimer as any).adaptiveTimer);
+        }
       }
     };
-  }, [isARMode, cameraReady, arSettings.enableRealTimePose]);
+  }, [isARMode, cameraReady, arSettings.enableRealTimePose, useNativePoseDetection]);
 
   if (hasPermission === null) {
     return (
@@ -564,6 +601,9 @@ export default function CameraScreen() {
       </SafeAreaView>
     );
   }
+
+  // Note: Native pose detection hook is disabled due to compatibility issues
+  // Will use TensorFlow.js fallback for now
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
@@ -653,12 +693,20 @@ export default function CameraScreen() {
           </View>
         )}
 
-        {/* Performance metrics overlay */}
+        {/* Enhanced Performance metrics overlay */}
         {isARMode && arSettings.showLandmarks && (
           <View style={styles.performanceOverlay}>
             <Text style={styles.performanceText}>
-              FPS: {performanceMetrics.fps} | Processing: {performanceMetrics.processingTime}ms
+              FPS: {adaptiveFrameRate} | Avg: {performanceMonitor.getMetrics().averageFps.toFixed(1)}
             </Text>
+            <Text style={styles.performanceText}>
+              Processing: {performanceMonitor.getMetrics().averageProcessingTime.toFixed(0)}ms
+            </Text>
+            {deviceCapabilities && (
+              <Text style={[styles.performanceText, { color: 'yellow' }]}>
+                Device: {deviceCapabilities.isLowEnd ? 'Low' : 'High'} End
+              </Text>
+            )}
             {poseDetectionError && (
               <Text style={[styles.performanceText, { color: 'red' }]}>
                 Error: {poseDetectionError}
@@ -670,8 +718,19 @@ export default function CameraScreen() {
                      measurementIntegrationStatus === 'error' ? 'red' : 'yellow'
             }]}>
               Measurements: {measurementIntegrationStatus === 'loaded' ? 'Active' :
-                            measurementIntegrationStatus === 'error' ? 'Error' :
-                            measurementIntegrationStatus === 'loading' ? 'Loading' : 'None'}
+                             measurementIntegrationStatus === 'error' ? 'Error' :
+                             measurementIntegrationStatus === 'loading' ? 'Loading' : 'None'}
+            </Text>
+
+            {/* Native pose detection status */}
+            {useNativePoseDetection && nativePose && (
+              <Text style={[styles.performanceText, { color: 'cyan' }]}>
+                Native Pose: {nativePose.confidence.toFixed(2)} | Landmarks: {Object.keys(nativePose.landmarks).length}
+              </Text>
+            )}
+            {/* Pose detection method indicator */}
+            <Text style={[styles.performanceText, { color: 'orange' }]}>
+              Method: {useNativePoseDetection ? 'Native' : 'TensorFlow'}
             </Text>
           </View>
         )}
@@ -859,6 +918,18 @@ export default function CameraScreen() {
                   <Text style={[styles.optionText, { color: theme.colors.onSurface }]}>Real-time Pose Detection</Text>
                   <Ionicons
                     name={arSettings.enableRealTimePose ? 'checkbox' : 'square-outline'}
+                    size={rf(24)}
+                    color={theme.colors.primary}
+                  />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.optionRow}
+                  onPress={() => setUseNativePoseDetection(!useNativePoseDetection)}
+                >
+                  <Text style={[styles.optionText, { color: theme.colors.onSurface }]}>Use Native Pose Detection</Text>
+                  <Ionicons
+                    name={useNativePoseDetection ? 'checkbox' : 'square-outline'}
                     size={rf(24)}
                     color={theme.colors.primary}
                   />
