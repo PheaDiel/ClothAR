@@ -122,6 +122,93 @@ export class StorageService {
   }
 
   /**
+   * Check if current user has admin privileges
+   */
+  private static async checkIfUserIsAdmin(): Promise<boolean> {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return false;
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role, role_status')
+        .eq('id', user.id)
+        .single();
+
+      return profile?.role === 'admin' || profile?.role === 'shop_owner';
+    } catch (error) {
+      console.error('Error checking admin status:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Upload image via Edge Function for admin users (secure)
+   */
+  private static async uploadViaEdgeFunction(
+    uri: string,
+    fileName: string,
+    folder: 'products' | 'virtual-tryon' = 'products'
+  ): Promise<UploadResult> {
+    try {
+      console.log('🔄 StorageService: Uploading via Edge Function for admin...');
+
+      // Get file blob and read as base64
+      const response = await fetch(uri);
+      const blob = await response.blob();
+
+      // Convert blob to base64 using FileReader (works in React Native)
+      const base64Data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result as string;
+          // Remove the data URL prefix (e.g., "data:image/jpeg;base64,")
+          const base64 = result.split(',')[1];
+          resolve(base64);
+        };
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsDataURL(blob);
+      });
+
+      // Get current session for authorization
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        return { success: false, error: 'User not authenticated' };
+      }
+
+      // Call Edge Function
+      const { data, error } = await supabase.functions.invoke('admin-upload', {
+        body: {
+          fileName,
+          folder,
+          fileData: base64Data,
+          contentType: blob.type
+        },
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`
+        }
+      });
+
+      if (error) {
+        console.error('❌ Edge Function error:', error);
+        return { success: false, error: error.message };
+      }
+
+      if (!data.success) {
+        console.error('❌ Edge Function returned error:', data.error);
+        return { success: false, error: data.error };
+      }
+
+      console.log('✅ Edge Function upload successful');
+      return { success: true, url: data.url };
+
+    } catch (error: any) {
+      console.error('❌ Edge Function upload exception:', error);
+      return { success: false, error: error.message || 'Edge Function upload failed' };
+    }
+  }
+
+  /**
    * Upload image to Supabase Storage with fallback handling
    */
   static async uploadImage(
@@ -132,6 +219,15 @@ export class StorageService {
     try {
       console.log('🔄 StorageService: Starting image upload process...');
       console.log('📁 Upload details:', { uri, fileName, folder });
+
+      // Check if user is admin - if so, use secure Edge Function
+      const isAdmin = await this.checkIfUserIsAdmin();
+      if (isAdmin) {
+        console.log('👑 User is admin, using secure Edge Function upload');
+        return this.uploadViaEdgeFunction(uri, fileName, folder);
+      }
+
+      console.log('👤 User is not admin, using standard upload with RLS policies');
 
       // Get file info
       console.log('🔄 StorageService: Fetching image blob...');
@@ -155,9 +251,21 @@ export class StorageService {
       });
       console.log('✅ StorageService: Image compressed');
 
-      // Get compressed blob
+      // Get compressed blob - React Native compatible approach
       const compressedResponse = await fetch(compressedUri);
       const compressedBlob = await compressedResponse.blob();
+
+      // Convert blob to Uint8Array for Supabase upload (React Native compatible)
+      const arrayBuffer = await new Promise<Uint8Array>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result as ArrayBuffer;
+          resolve(new Uint8Array(result));
+        };
+        reader.onerror = () => reject(new Error('Failed to read compressed file'));
+        reader.readAsArrayBuffer(compressedBlob);
+      });
+
       console.log('✅ StorageService: Compressed blob ready, size:', compressedBlob.size);
 
       // Generate unique filename
@@ -208,7 +316,7 @@ export class StorageService {
       try {
         const uploadPromise = supabase.storage
           .from(this.BUCKET_NAME)
-          .upload(uniqueFileName, compressedBlob, {
+          .upload(uniqueFileName, arrayBuffer, {
             contentType: compressedBlob.type,
             upsert: false
           });

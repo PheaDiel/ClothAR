@@ -70,7 +70,7 @@ export class ProductService {
 
       // Use optimized function for better performance
       const { data: products, error } = await supabase
-        .rpc('get_products_paginated', {
+        .rpc('get_procucts_cached', {
           p_category: category,
           p_search: search || null,
           p_limit: limit,
