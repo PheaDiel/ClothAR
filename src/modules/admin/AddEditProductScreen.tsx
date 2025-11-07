@@ -19,6 +19,18 @@ import { StorageService } from '../../services/storageService';
 import { ProductService } from '../../services/productService';
 import * as ImageManipulator from 'expo-image-manipulator';
 
+interface AnchorPoint {
+  name: string;
+  x: number;
+  y: number;
+  type: 'shoulder' | 'hip' | 'neck' | 'waist' | 'arm' | 'leg';
+}
+
+interface VirtualTryOnAnchorPoints {
+  imageIndex: number;
+  anchorPoints: AnchorPoint[];
+}
+
 interface Product {
   id?: string;
   name: string;
@@ -27,6 +39,7 @@ interface Product {
   base_price: number;
   images: string[];
   virtual_tryon_images: string[];
+  virtual_tryon_anchor_points: VirtualTryOnAnchorPoints[];
   fabric_ids: string[];
   is_active: boolean;
 }
@@ -43,6 +56,10 @@ const AddEditProductScreen = () => {
   const [imageScale, setImageScale] = useState(1);
   const [showScaleModal, setShowScaleModal] = useState(false);
   const [scalingImage, setScalingImage] = useState<string | null>(null);
+  const [selectedImageForAnchors, setSelectedImageForAnchors] = useState<number | null>(null);
+  const [showAnchorModal, setShowAnchorModal] = useState(false);
+  const [anchorPoints, setAnchorPoints] = useState<AnchorPoint[]>([]);
+  const [imageDimensions, setImageDimensions] = useState<{ width: number; height: number } | null>(null);
 
   const [productData, setProductData] = useState<Product>({
     name: '',
@@ -51,6 +68,7 @@ const AddEditProductScreen = () => {
     base_price: 0,
     images: [],
     virtual_tryon_images: [],
+    virtual_tryon_anchor_points: [],
     fabric_ids: [],
     is_active: true,
   });
@@ -277,6 +295,7 @@ const AddEditProductScreen = () => {
         setProductData(prev => ({
           ...prev,
           virtual_tryon_images: prev.virtual_tryon_images.filter((_, i) => i !== index),
+          virtual_tryon_anchor_points: prev.virtual_tryon_anchor_points.filter(ap => ap.imageIndex !== index),
         }));
       } else {
         setProductData(prev => ({
@@ -306,6 +325,7 @@ const AddEditProductScreen = () => {
                 setProductData(prev => ({
                   ...prev,
                   virtual_tryon_images: prev.virtual_tryon_images.filter((_, i) => i !== index),
+                  virtual_tryon_anchor_points: prev.virtual_tryon_anchor_points.filter(ap => ap.imageIndex !== index),
                 }));
               } else {
                 setProductData(prev => ({
@@ -320,6 +340,81 @@ const AddEditProductScreen = () => {
         }
       ]
     );
+  };
+
+  const openAnchorEditor = async (imageIndex: number) => {
+    const imageUri = productData.virtual_tryon_images[imageIndex];
+    if (!imageUri) return;
+
+    try {
+      // Get image dimensions
+      const dims = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+        Image.getSize(
+          imageUri,
+          (w, h) => resolve({ width: w, height: h }),
+          (e) => reject(e)
+        );
+      });
+
+      setImageDimensions(dims);
+      setSelectedImageForAnchors(imageIndex);
+
+      // Load existing anchor points for this image
+      const existingAnchors = productData.virtual_tryon_anchor_points.find(ap => ap.imageIndex === imageIndex);
+      setAnchorPoints(existingAnchors?.anchorPoints || []);
+
+      setShowAnchorModal(true);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to load image dimensions');
+    }
+  };
+
+  const addAnchorPoint = (type: AnchorPoint['type']) => {
+    if (!imageDimensions) return;
+
+    const newPoint: AnchorPoint = {
+      name: `${type}_${anchorPoints.filter(p => p.type === type).length + 1}`,
+      x: imageDimensions.width / 2,
+      y: imageDimensions.height / 2,
+      type
+    };
+
+    setAnchorPoints(prev => [...prev, newPoint]);
+  };
+
+  const updateAnchorPoint = (index: number, updates: Partial<AnchorPoint>) => {
+    setAnchorPoints(prev => prev.map((point, i) =>
+      i === index ? { ...point, ...updates } : point
+    ));
+  };
+
+  const removeAnchorPoint = (index: number) => {
+    setAnchorPoints(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const saveAnchorPoints = () => {
+    if (selectedImageForAnchors === null) return;
+
+    const updatedAnchorPoints = productData.virtual_tryon_anchor_points.filter(
+      ap => ap.imageIndex !== selectedImageForAnchors
+    );
+
+    if (anchorPoints.length > 0) {
+      updatedAnchorPoints.push({
+        imageIndex: selectedImageForAnchors,
+        anchorPoints: anchorPoints
+      });
+    }
+
+    setProductData(prev => ({
+      ...prev,
+      virtual_tryon_anchor_points: updatedAnchorPoints
+    }));
+
+    setShowAnchorModal(false);
+    setSelectedImageForAnchors(null);
+    setAnchorPoints([]);
+    setImageDimensions(null);
   };
 
 
@@ -432,6 +527,81 @@ const AddEditProductScreen = () => {
         </Modal>
       </Portal>
 
+      {/* Anchor Points Modal */}
+      <Portal>
+        <Modal
+          visible={showAnchorModal}
+          onDismiss={() => setShowAnchorModal(false)}
+          contentContainerStyle={styles.anchorModalContainer}
+        >
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Define Anchor Points</Text>
+            <Text style={styles.modalSubtitle}>
+              Click on the image to add anchor points that will align with body landmarks
+            </Text>
+
+            {imageDimensions && selectedImageForAnchors !== null && (
+              <View style={styles.anchorImageContainer}>
+                <Image
+                  source={{ uri: productData.virtual_tryon_images[selectedImageForAnchors] }}
+                  style={[styles.anchorImage, { width: 300, height: 300 * (imageDimensions.height / imageDimensions.width) }]}
+                  resizeMode="contain"
+                />
+                {anchorPoints.map((point, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    style={[
+                      styles.anchorPoint,
+                      {
+                        left: (point.x / imageDimensions.width) * 300 - 8,
+                        top: (point.y / imageDimensions.height) * (300 * (imageDimensions.height / imageDimensions.width)) - 8,
+                      }
+                    ]}
+                    onPress={() => removeAnchorPoint(index)}
+                  >
+                    <Text style={styles.anchorPointLabel}>{point.type.charAt(0).toUpperCase()}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
+            <View style={styles.anchorControls}>
+              <Text style={styles.anchorControlsTitle}>Add Anchor Points:</Text>
+              <View style={styles.anchorTypeButtons}>
+                {(['shoulder', 'hip', 'neck', 'waist', 'arm', 'leg'] as const).map(type => (
+                  <TouchableOpacity
+                    key={type}
+                    style={styles.anchorTypeButton}
+                    onPress={() => addAnchorPoint(type)}
+                  >
+                    <Text style={styles.anchorTypeButtonText}>
+                      {type.charAt(0).toUpperCase() + type.slice(1)}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.anchorActions}>
+              <Button
+                mode="outlined"
+                onPress={() => setShowAnchorModal(false)}
+                style={styles.anchorCancelButton}
+              >
+                Cancel
+              </Button>
+              <Button
+                mode="contained"
+                onPress={saveAnchorPoints}
+                style={styles.anchorSaveButton}
+              >
+                Save Anchors ({anchorPoints.length})
+              </Button>
+            </View>
+          </View>
+        </Modal>
+      </Portal>
+
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         {/* Header */}
         <View style={styles.header}>
@@ -536,6 +706,7 @@ const AddEditProductScreen = () => {
             <Title style={styles.sectionTitle}>Virtual Try-On Images (PNG)</Title>
             <Text style={styles.sectionDescription}>
               Upload PNG images specifically designed for virtual try-on overlays. These should be transparent backgrounds for best results.
+              Define anchor points to ensure proper positioning on the user's body.
             </Text>
             <Button
               mode="outlined"
@@ -548,28 +719,48 @@ const AddEditProductScreen = () => {
             </Button>
 
             <View style={styles.imagesContainer}>
-              {productData.virtual_tryon_images.map((image, index) => (
-                <View key={index} style={styles.imageWrapper}>
-                  <Image source={{ uri: image }} style={styles.image} />
-                  <View style={styles.imageControls}>
-                    <TouchableOpacity
-                      style={styles.scaleButton}
-                      onPress={() => {
-                        setScalingImage(image);
-                        setShowScaleModal(true);
-                      }}
-                    >
-                      <Ionicons name="resize" size={16} color={theme.colors.primary} />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.removeImageButton}
-                      onPress={() => removeImage(index, true)}
-                    >
-                      <Ionicons name="close-circle" size={20} color={theme.colors.danger} />
-                    </TouchableOpacity>
+              {productData.virtual_tryon_images.map((image, index) => {
+                const hasAnchors = productData.virtual_tryon_anchor_points.some(ap => ap.imageIndex === index);
+                return (
+                  <View key={index} style={styles.imageWrapper}>
+                    <Image source={{ uri: image }} style={styles.image} />
+                    <View style={styles.imageControls}>
+                      <TouchableOpacity
+                        style={styles.anchorButton}
+                        onPress={() => openAnchorEditor(index)}
+                      >
+                        <Ionicons
+                          name="location"
+                          size={16}
+                          color={hasAnchors ? theme.colors.success : theme.colors.warning}
+                        />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.scaleButton}
+                        onPress={() => {
+                          setScalingImage(image);
+                          setShowScaleModal(true);
+                        }}
+                      >
+                        <Ionicons name="resize" size={16} color={theme.colors.primary} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.removeImageButton}
+                        onPress={() => removeImage(index, true)}
+                      >
+                        <Ionicons name="close-circle" size={20} color={theme.colors.danger} />
+                      </TouchableOpacity>
+                    </View>
+                    {hasAnchors && (
+                      <View style={styles.anchorIndicator}>
+                        <Text style={styles.anchorIndicatorText}>
+                          {productData.virtual_tryon_anchor_points.find(ap => ap.imageIndex === index)?.anchorPoints.length} anchors
+                        </Text>
+                      </View>
+                    )}
                   </View>
-                </View>
-              ))}
+                );
+              })}
             </View>
           </Card.Content>
         </Card>
@@ -823,6 +1014,99 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scaleApplyButton: {
+    flex: 1,
+  },
+  anchorButton: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: wp(6),
+    padding: wp(1),
+    elevation: 2,
+  },
+  anchorIndicator: {
+    position: 'absolute',
+    bottom: hp(0.5),
+    left: wp(0.5),
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    borderRadius: wp(2),
+    paddingHorizontal: wp(1),
+    paddingVertical: hp(0.2),
+  },
+  anchorIndicatorText: {
+    color: 'white',
+    fontSize: rf(10),
+    fontWeight: '500',
+  },
+  anchorModalContainer: {
+    margin: wp(2),
+    backgroundColor: theme.colors.surface,
+    borderRadius: wp(3),
+    padding: wp(5),
+    maxHeight: '90%',
+  },
+  anchorImageContainer: {
+    position: 'relative',
+    alignItems: 'center',
+    marginVertical: hp(2),
+    backgroundColor: theme.colors.background,
+    borderRadius: wp(2),
+    padding: wp(2),
+  },
+  anchorImage: {
+    borderRadius: wp(2),
+  },
+  anchorPoint: {
+    position: 'absolute',
+    width: wp(4),
+    height: wp(4),
+    borderRadius: wp(2),
+    backgroundColor: theme.colors.primary,
+    borderWidth: 2,
+    borderColor: 'white',
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 3,
+  },
+  anchorPointLabel: {
+    color: 'white',
+    fontSize: rf(10),
+    fontWeight: 'bold',
+  },
+  anchorControls: {
+    marginVertical: hp(2),
+  },
+  anchorControlsTitle: {
+    fontSize: rf(16),
+    fontWeight: '600',
+    color: theme.colors.textPrimary,
+    marginBottom: hp(1),
+  },
+  anchorTypeButtons: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: wp(2),
+  },
+  anchorTypeButton: {
+    backgroundColor: theme.colors.primary + '20',
+    borderRadius: wp(2),
+    paddingHorizontal: wp(3),
+    paddingVertical: hp(1),
+    minWidth: wp(20),
+    alignItems: 'center',
+  },
+  anchorTypeButtonText: {
+    color: theme.colors.primary,
+    fontSize: rf(14),
+    fontWeight: '500',
+  },
+  anchorActions: {
+    flexDirection: 'row',
+    gap: wp(3),
+    marginTop: hp(2),
+  },
+  anchorCancelButton: {
+    flex: 1,
+  },
+  anchorSaveButton: {
     flex: 1,
   },
 });

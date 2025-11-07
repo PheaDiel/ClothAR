@@ -342,6 +342,12 @@ export default function CameraScreen() {
           } catch {}
         }
         const imageDimensions = dims || { width: 200, height: 300 };
+
+        // Get anchor points for the selected clothing
+        const anchorPoints = selectedClothing.virtual_tryon_anchor_points?.find(
+          (ap: any) => ap.imageIndex === 0
+        )?.anchorPoints;
+
         const overlay = await renderClothingOverlay(selectedClothing, poseResult, imageDimensions, userMeasurements);
         setClothingOverlay(overlay);
       }

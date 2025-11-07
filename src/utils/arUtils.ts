@@ -92,6 +92,7 @@ export interface ClothingOverlay {
   category: 'tops' | 'bottoms' | 'dresses' | 'outerwear';
   layer: number; // Z-index for layering
   physics?: ClothPhysics; // Physics properties for cloth simulation
+  anchorPoints?: Array<{ name: string; x: number; y: number; type: string }>; // Anchor points for precise positioning
 }
 
 // Multi-layer clothing support
@@ -581,12 +582,13 @@ function applyMeasurementBasedPositioning(
   };
 }
 
-// Function to calculate clothing overlay position based on body landmarks with enhanced measurement integration
+// Function to calculate clothing overlay position based on body landmarks with enhanced measurement integration and anchor points
 export function calculateClothingPosition(
   clothingCategory: string,
   landmarks: BodyLandmarks,
   imageDimensions: { width: number; height: number },
-  userMeasurements?: any
+  userMeasurements?: any,
+  anchorPoints?: Array<{ name: string; x: number; y: number; type: string }>
 ): ClothingOverlay['position'] & { scale: number } {
   const { leftShoulder, rightShoulder, leftHip, rightHip, nose } = landmarks;
 
@@ -616,6 +618,17 @@ export function calculateClothingPosition(
     imageDimensions,
     userMeasurements
   );
+
+  // If anchor points are provided, use them for precise positioning
+  if (anchorPoints && anchorPoints.length > 0) {
+    return calculateAnchorBasedPosition(
+      anchorPoints,
+      landmarks,
+      imageDimensions,
+      scaleMultiplier,
+      measurementAdjustments
+    );
+  }
 
   switch (clothingCategory) {
     case 'tops':
@@ -866,6 +879,11 @@ export async function renderClothingOverlay(
 
     const position = calculateClothingPosition(clothingItem.category, bodyPose.landmarks, imageDimensions, userMeasurements);
 
+    // Get anchor points from the clothing item if available
+    const anchorPoints = clothingItem.virtual_tryon_anchor_points?.find(
+      (ap: any) => ap.imageIndex === 0
+    )?.anchorPoints || [];
+
     // Enhanced overlay with better transparency and positioning
     const overlay: ClothingOverlay = {
       id: clothingItem.id,
@@ -876,7 +894,8 @@ export async function renderClothingOverlay(
       opacity: 0.85, // Slightly higher opacity for better visibility
       category: clothingItem.category,
       layer: 0, // Default layer
-      physics: createDefaultPhysicsForCategory(clothingItem.category)
+      physics: createDefaultPhysicsForCategory(clothingItem.category),
+      anchorPoints: anchorPoints
     };
 
     return overlay;
@@ -911,6 +930,95 @@ export async function saveARResult(imageUri: string, filename: string) {
   } catch (error) {
     console.error('Error saving AR result:', error);
     throw error;
+  }
+}
+
+// Function to calculate position based on anchor points
+function calculateAnchorBasedPosition(
+  anchorPoints: Array<{ name: string; x: number; y: number; type: string }>,
+  landmarks: BodyLandmarks,
+  imageDimensions: { width: number; height: number },
+  scaleMultiplier: number,
+  measurementAdjustments: { position: { x: number; y: number }; scale: number }
+): ClothingOverlay['position'] & { scale: number } {
+  if (anchorPoints.length === 0) {
+    return { x: 0, y: 0, scale: 1 };
+  }
+
+  // Group anchor points by type
+  const anchorGroups = anchorPoints.reduce((groups, point) => {
+    if (!groups[point.type]) {
+      groups[point.type] = [];
+    }
+    groups[point.type].push(point);
+    return groups;
+  }, {} as Record<string, typeof anchorPoints>);
+
+  // Calculate position based on anchor point types
+  let totalOffsetX = 0;
+  let totalOffsetY = 0;
+  let totalScale = 0;
+  let anchorCount = 0;
+
+  Object.entries(anchorGroups).forEach(([type, points]) => {
+    points.forEach(anchor => {
+      // Map anchor point type to body landmark
+      const landmarkKey = getLandmarkForAnchorType(type);
+      if (landmarkKey && landmarks[landmarkKey]) {
+        const landmark = landmarks[landmarkKey];
+
+        // Calculate offset from anchor point to landmark
+        const anchorOffsetX = landmark.x - (anchor.x / imageDimensions.width) * screenWidth;
+        const anchorOffsetY = landmark.y - (anchor.y / imageDimensions.height) * screenHeight;
+
+        totalOffsetX += anchorOffsetX;
+        totalOffsetY += anchorOffsetY;
+        totalScale += Math.sqrt(
+          Math.pow(landmark.x - (anchor.x / imageDimensions.width) * screenWidth, 2) +
+          Math.pow(landmark.y - (anchor.y / imageDimensions.height) * screenHeight, 2)
+        );
+        anchorCount++;
+      }
+    });
+  });
+
+  if (anchorCount === 0) {
+    return { x: 0, y: 0, scale: 1 };
+  }
+
+  // Average the offsets and scale
+  const avgOffsetX = totalOffsetX / anchorCount;
+  const avgOffsetY = totalOffsetY / anchorCount;
+  const avgScale = totalScale / anchorCount;
+
+  // Calculate final scale
+  const baseScale = avgScale / Math.max(imageDimensions.width, imageDimensions.height);
+  const finalScale = Math.max(0.3, Math.min(2.0, baseScale * scaleMultiplier * measurementAdjustments.scale));
+
+  return {
+    x: avgOffsetX + measurementAdjustments.position.x,
+    y: avgOffsetY + measurementAdjustments.position.y,
+    scale: finalScale
+  };
+}
+
+// Helper function to map anchor types to body landmarks
+function getLandmarkForAnchorType(anchorType: string): keyof BodyLandmarks | null {
+  switch (anchorType) {
+    case 'shoulder':
+      return 'leftShoulder'; // Use left shoulder as reference, adjust as needed
+    case 'hip':
+      return 'leftHip';
+    case 'neck':
+      return 'nose'; // Closest approximation
+    case 'waist':
+      return 'leftHip'; // Approximation
+    case 'arm':
+      return 'leftElbow';
+    case 'leg':
+      return 'leftKnee';
+    default:
+      return null;
   }
 }
 
