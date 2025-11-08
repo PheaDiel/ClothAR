@@ -93,6 +93,7 @@ export interface ClothingOverlay {
   layer: number; // Z-index for layering
   physics?: ClothPhysics; // Physics properties for cloth simulation
   anchorPoints?: Array<{ name: string; x: number; y: number; type: string }>; // Anchor points for precise positioning
+  aspectRatio?: number; // Aspect ratio for proper scaling to prevent stretching
 }
 
 // Multi-layer clothing support
@@ -325,7 +326,7 @@ function detectAndCorrectPerspective(landmarks: BodyLandmarks, boundingBox: any)
 }
 
 // Function to detect body pose using ML model with enhanced stability
-export async function detectBodyPose(imageUri?: string): Promise<{ landmarks: BodyLandmarks; boundingBox: { x: number; y: number; width: number; height: number } }> {
+export async function detectBodyPose(imageUri?: string): Promise<{ landmarks: BodyLandmarks; boundingBox: { x: number; y: number; width: number; height: number } } | null> {
   try {
     console.log('🔍 DEBUG: detectBodyPose called with imageUri:', imageUri ? 'provided' : 'not provided');
     console.log('🔍 DEBUG: Platform:', Platform.OS);
@@ -511,7 +512,8 @@ export async function detectBodyPose(imageUri?: string): Promise<{ landmarks: Bo
     return { landmarks, boundingBox };
   } catch (error) {
     console.error('Error detecting body pose:', error);
-    throw error;
+    // Return null instead of throwing to allow fallback handling
+    return null;
   }
 }
 
@@ -589,7 +591,7 @@ export function calculateClothingPosition(
   imageDimensions: { width: number; height: number },
   userMeasurements?: any,
   anchorPoints?: Array<{ name: string; x: number; y: number; type: string }>
-): ClothingOverlay['position'] & { scale: number } {
+): ClothingOverlay['position'] & { scale: number; aspectRatio?: number } {
   const { leftShoulder, rightShoulder, leftHip, rightHip, nose } = landmarks;
 
   // Use user measurements for more realistic scaling if available
@@ -641,14 +643,16 @@ export function calculateClothingPosition(
       const headClearance = nose.y < shoulderCenterY ? (shoulderCenterY - nose.y) * 0.1 : 0;
       const adjustedY = shoulderCenterY - headClearance;
 
-      // Calculate scale based on shoulder width with constraints
+      // Calculate scale based on shoulder width with aspect ratio preservation
       const targetScale = shoulderWidth / imageDimensions.width;
+      const topsAspectRatio = imageDimensions.width / imageDimensions.height;
       const finalScale = Math.max(minScale, Math.min(maxScale, targetScale * scaleMultiplier * measurementAdjustments.scale));
-
+    
       return {
         x: shoulderCenterX - (imageDimensions.width * 0.5 * finalScale) + measurementAdjustments.position.x,
         y: adjustedY - (imageDimensions.height * 0.2 * finalScale) + measurementAdjustments.position.y,
-        scale: finalScale
+        scale: finalScale,
+        aspectRatio: topsAspectRatio
       };
 
     case 'bottoms':
@@ -656,14 +660,16 @@ export function calculateClothingPosition(
       const hipCenterX = (leftHip.x + rightHip.x) / 2;
       const hipCenterY = (leftHip.y + rightHip.y) / 2;
 
-      // Calculate scale based on hip width with constraints
+      // Calculate scale based on hip width with aspect ratio preservation
       const hipScale = hipWidth / imageDimensions.width;
+      const bottomsAspectRatio = imageDimensions.width / imageDimensions.height;
       const finalHipScale = Math.max(minScale, Math.min(maxScale, hipScale * scaleMultiplier * measurementAdjustments.scale));
 
       return {
         x: hipCenterX - (imageDimensions.width * 0.5 * finalHipScale) + measurementAdjustments.position.x,
         y: hipCenterY - (imageDimensions.height * 0.1 * finalHipScale) + measurementAdjustments.position.y,
-        scale: finalHipScale
+        scale: finalHipScale,
+        aspectRatio: bottomsAspectRatio
       };
 
     case 'dresses':
@@ -673,23 +679,27 @@ export function calculateClothingPosition(
       const dressBottomY = (leftHip.y + rightHip.y) / 2;
       const dressHeight = Math.abs(dressBottomY - dressTopY);
 
-      // Calculate scale based on both width and height constraints
+      // Calculate scale based on both width and height constraints with aspect ratio preservation
       const widthScale = shoulderWidth / imageDimensions.width;
       const heightScale = dressHeight / imageDimensions.height;
       const dressScale = Math.min(widthScale, heightScale);
+      const dressesAspectRatio = imageDimensions.width / imageDimensions.height;
       const finalDressScale = Math.max(minScale, Math.min(maxScale, dressScale * scaleMultiplier * measurementAdjustments.scale));
 
       return {
         x: dressCenterX - (imageDimensions.width * 0.5 * finalDressScale) + measurementAdjustments.position.x,
         y: dressTopY - (imageDimensions.height * 0.05 * finalDressScale) + measurementAdjustments.position.y,
-        scale: finalDressScale
+        scale: finalDressScale,
+        aspectRatio: dressesAspectRatio
       };
 
     default:
+      const defaultAspectRatio = imageDimensions.width / imageDimensions.height;
       return {
         x: screenWidth / 2 - (imageDimensions.width * scaleMultiplier) / 2,
         y: screenHeight / 2 - (imageDimensions.height * scaleMultiplier) / 2,
-        scale: Math.max(minScale, Math.min(maxScale, scaleMultiplier))
+        scale: Math.max(minScale, Math.min(maxScale, scaleMultiplier)),
+        aspectRatio: defaultAspectRatio
       };
   }
 }
@@ -869,7 +879,7 @@ function applyPhysicsToLayer(layer: ClothingLayer, bodyPose: { landmarks: BodyLa
 // Function to render clothing overlay on detected body with enhanced features
 export async function renderClothingOverlay(
   clothingItem: any,
-  bodyPose: { landmarks: BodyLandmarks; boundingBox: any },
+  bodyPose: { landmarks: BodyLandmarks; boundingBox: any } | null,
   imageDimensions: { width: number; height: number },
   userMeasurements?: any
 ): Promise<ClothingOverlay> {
@@ -877,7 +887,40 @@ export async function renderClothingOverlay(
     // Use virtual try-on images if available, otherwise fall back to regular images
     const imageUri = clothingItem.virtual_tryon_images?.[0] || clothingItem.images?.[0] || clothingItem.imageUri;
 
-    const position = calculateClothingPosition(clothingItem.category, bodyPose.landmarks, imageDimensions, userMeasurements);
+    // If no body pose is provided, use fallback positioning
+    let position: { x: number; y: number; scale: number; aspectRatio?: number };
+    if (bodyPose && bodyPose.landmarks) {
+      position = calculateClothingPosition(clothingItem.category, bodyPose.landmarks, imageDimensions, userMeasurements);
+    } else {
+      // Fallback positioning - center the clothing on screen
+      console.log('Using fallback positioning for clothing overlay');
+      const centerX = screenWidth / 2;
+      const centerY = screenHeight / 2;
+
+      // Estimate reasonable scale based on screen size and clothing category
+      let scale = 1;
+      switch (clothingItem.category) {
+        case 'tops':
+        case 'outerwear':
+          scale = Math.min(screenWidth / imageDimensions.width, screenHeight * 0.4 / imageDimensions.height);
+          break;
+        case 'bottoms':
+          scale = Math.min(screenWidth / imageDimensions.width, screenHeight * 0.3 / imageDimensions.height);
+          break;
+        case 'dresses':
+          scale = Math.min(screenWidth / imageDimensions.width, screenHeight * 0.6 / imageDimensions.height);
+          break;
+        default:
+          scale = Math.min(screenWidth * 0.8 / imageDimensions.width, screenHeight * 0.8 / imageDimensions.height);
+      }
+
+      position = {
+        x: centerX - (imageDimensions.width * scale) / 2,
+        y: centerY - (imageDimensions.height * scale) / 2,
+        scale: Math.max(0.3, Math.min(2.0, scale)),
+        aspectRatio: imageDimensions.width / imageDimensions.height
+      };
+    }
 
     // Get anchor points from the clothing item if available
     const anchorPoints = clothingItem.virtual_tryon_anchor_points?.find(
@@ -895,13 +938,33 @@ export async function renderClothingOverlay(
       category: clothingItem.category,
       layer: 0, // Default layer
       physics: createDefaultPhysicsForCategory(clothingItem.category),
-      anchorPoints: anchorPoints
+      anchorPoints: anchorPoints,
+      aspectRatio: position.aspectRatio
     };
 
     return overlay;
   } catch (error) {
     console.error('Error rendering clothing overlay:', error);
-    throw error;
+    // Return a basic overlay even on error
+    const centerX = screenWidth / 2;
+    const centerY = screenHeight / 2;
+    const fallbackScale = Math.min(screenWidth * 0.6 / imageDimensions.width, screenHeight * 0.6 / imageDimensions.height);
+
+    return {
+      id: clothingItem.id,
+      imageUri: clothingItem.virtual_tryon_images?.[0] || clothingItem.images?.[0] || clothingItem.imageUri,
+      position: {
+        x: centerX - (imageDimensions.width * fallbackScale) / 2,
+        y: centerY - (imageDimensions.height * fallbackScale) / 2
+      },
+      scale: Math.max(0.3, fallbackScale),
+      rotation: 0,
+      opacity: 0.7,
+      category: clothingItem.category,
+      layer: 0,
+      physics: createDefaultPhysicsForCategory(clothingItem.category),
+      anchorPoints: []
+    };
   }
 }
 

@@ -243,11 +243,11 @@ export class StorageService {
       }
       console.log('✅ StorageService: Image validation passed');
 
-      // Compress image for upload
+      // Compress image for upload (preserve original aspect ratio)
       console.log('🔄 StorageService: Compressing image...');
       const compressedUri = await this.compressImage(uri, {
         compress: 0.8,
-        resize: { width: 1200, height: 1200 } // Max dimensions
+        // Remove fixed resize to preserve original scale/aspect ratio
       });
       console.log('✅ StorageService: Image compressed');
 

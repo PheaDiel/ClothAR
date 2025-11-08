@@ -109,31 +109,36 @@ export const InventoryProvider = ({ children }: { children: ReactNode }) => {
   const reload = async () => {
     setLoading(true);
     try {
+      console.log('InventoryContext: Starting product reload...');
       // Try to load real products from database first
       const result = await ProductService.getProducts();
       if (result.success && result.products) {
+        console.log('InventoryContext: Loaded products from database:', result.products.length);
         // Transform database products to Item format
-        const transformedItems: Item[] = result.products.map(product => ({
-          id: product.id,
-          name: product.name,
-          price: product.base_price,
-          images: product.images,
-          category: product.category,
-          sizes: [], // Will be populated from variants if needed
-          stock: {}, // Will be populated from variants if needed
-          description: product.description || '',
-          fabricTypes: [], // Will be populated if available
-        }));
+        const transformedItems: Item[] = result.products.map(product => {
+          console.log('InventoryContext: Transforming product:', product.name, 'Images:', product.images);
+          return {
+            id: product.id,
+            name: product.name,
+            price: product.base_price,
+            images: product.images,
+            category: product.category,
+            sizes: [], // Will be populated from variants if needed
+            stock: {}, // Will be populated from variants if needed
+            description: product.description || '',
+            fabricTypes: [], // Will be populated if available
+          };
+        });
         setItems(transformedItems);
         await save('@inventory_items', transformedItems);
       } else {
         // Fallback to sample data if database is not available
-        console.warn('Failed to load products from database, using sample data');
+        console.warn('InventoryContext: Failed to load products from database, using sample data. Error:', result.error);
         setItems(SAMPLE);
         await save('@inventory_items', SAMPLE);
       }
     } catch (error) {
-      console.error('Error loading inventory:', error);
+      console.error('InventoryContext: Error loading inventory:', error);
       // Fallback to sample data
       setItems(SAMPLE);
       await save('@inventory_items', SAMPLE);

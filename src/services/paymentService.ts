@@ -36,7 +36,7 @@ export class PaymentService {
         .from('receipts')
         .getPublicUrl(fileName);
 
-      // Update order with receipt URL
+      // Update order with receipt URL - use order_number instead of id for lookup
       const { error: updateError } = await supabase
         .from('orders')
         .update({
@@ -44,7 +44,7 @@ export class PaymentService {
           payment_verification_status: 'pending',
           updated_at: new Date().toISOString()
         })
-        .eq('id', orderId);
+        .eq('order_number', orderId);
 
       if (updateError) throw updateError;
 
@@ -80,9 +80,18 @@ export class PaymentService {
         return { success: false, error: 'Unauthorized to verify payments' };
       }
 
+      // First get the order ID from order number
+      const { data: orderData, error: orderError } = await supabase
+        .from('orders')
+        .select('id')
+        .eq('order_number', orderId)
+        .single();
+
+      if (orderError) throw orderError;
+
       // Use the database function to update payment verification
       const { error } = await supabase.rpc('update_payment_verification', {
-        p_order_id: orderId,
+        p_order_id: orderData.id,
         p_status: status,
         p_verified_by: user.id,
         p_notes: notes

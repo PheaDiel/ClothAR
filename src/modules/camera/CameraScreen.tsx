@@ -1,11 +1,12 @@
 // src/modules/camera/CameraScreen.tsx
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Alert, Dimensions, TouchableOpacity, ScrollView, StatusBar, Image } from 'react-native';
+import { View, Text, StyleSheet, Alert, Dimensions, TouchableOpacity, ScrollView, StatusBar, Image, Share, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, Camera } from 'expo-camera';
-import { Button, Card, IconButton, useTheme } from 'react-native-paper';
+import { Button, Card, IconButton, useTheme, Portal, Modal } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import * as ScreenOrientation from 'expo-screen-orientation';
+import * as FileSystem from 'expo-file-system';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -44,8 +45,10 @@ export default function CameraScreen() {
     showGrid: false,
     showLandmarks: false,
     clothingOpacity: 0.8,
-    enableRealTimePose: false,
+    enableRealTimePose: true,
   });
+  const [lastPoseUpdate, setLastPoseUpdate] = useState(0);
+  const [poseUpdateDebounce, setPoseUpdateDebounce] = useState(100); // ms
   const [showTutorial, setShowTutorial] = useState(false);
   const [isLoadingPose, setIsLoadingPose] = useState(false);
   const [poseDetectionError, setPoseDetectionError] = useState<string | null>(null);
@@ -61,6 +64,8 @@ export default function CameraScreen() {
   const [useNativePoseDetection, setUseNativePoseDetection] = useState(false);
   const [deviceCapabilities, setDeviceCapabilities] = useState<any>(null);
   const [adaptiveFrameRate, setAdaptiveFrameRate] = useState(30);
+  const [capturedImage, setCapturedImage] = useState<any>(null);
+  const [showCaptureOptions, setShowCaptureOptions] = useState(false);
 
   // Animation values
   const controlsVisible = useSharedValue(1);
@@ -168,10 +173,10 @@ export default function CameraScreen() {
 
         // Configure enhanced AR features
         setPoseStabilityConfig({
-          smoothingFactor: 0.7,
-          confidenceThreshold: 0.5,
-          maxJitterThreshold: 10,
-          temporalWindowSize: 5,
+          smoothingFactor: 0.8,
+          confidenceThreshold: 0.6,
+          maxJitterThreshold: 5,
+          temporalWindowSize: 8,
         });
 
         setPerspectiveCorrectionConfig({
@@ -246,26 +251,103 @@ export default function CameraScreen() {
       captureButtonScale.value = withSpring(0.9, {}, () => {
         captureButtonScale.value = withSpring(1);
       });
-      
+
       try {
-        Alert.alert('AR Capture', 'In a full implementation, this would capture an image and process it with AR to show how clothing would look on you.');
+        // Capture the current camera frame with AR overlay
+        const photo = await cameraRef.current.takePictureAsync({
+          quality: 0.8,
+          base64: false,
+          exif: true,
+        });
+
+        // Process the captured image with current AR state
+        const arImageData = {
+          uri: photo.uri,
+          timestamp: Date.now(),
+          arMode: true,
+          clothingOverlay: clothingOverlay,
+          clothingLayers: multiLayerMode ? clothingLayers : null,
+          poseData: bodyPose,
+          userMeasurements: userMeasurements,
+          arSettings: arSettings,
+        };
+
+        console.log('AR capture completed:', arImageData);
+
+        // Store captured image and show options
+        setCapturedImage(arImageData);
+        setShowCaptureOptions(true);
+
       } catch (error) {
-        Alert.alert('Error', 'Failed to capture image');
+        console.error('AR capture error:', error);
+        Alert.alert('Error', 'Failed to capture AR image');
       } finally {
         setIsLoading(false);
       }
     }
   };
 
+  const saveToGallery = async () => {
+    if (!capturedImage) return;
+
+    try {
+      // For React Native, we can use FileSystem to copy to a more accessible location
+      // or implement proper gallery saving with expo-media-library when available
+      const fileName = `clothar_ar_${capturedImage.timestamp}.jpg`;
+      const newUri = `${FileSystem.documentDirectory}${fileName}`;
+
+      await FileSystem.copyAsync({
+        from: capturedImage.uri,
+        to: newUri
+      });
+
+      Alert.alert('Success', `AR image saved as ${fileName} in app documents`);
+      setShowCaptureOptions(false);
+      setCapturedImage(null);
+    } catch (error) {
+      console.error('Save to gallery error:', error);
+      Alert.alert('Error', 'Failed to save image to gallery');
+    }
+  };
+
+  const shareImage = async () => {
+    if (!capturedImage) return;
+
+    try {
+      await Share.share({
+        message: 'Check out this virtual try-on from ClothAR!',
+        url: capturedImage.uri, // On iOS this works, on Android it may need file:// prefix
+      });
+      setShowCaptureOptions(false);
+    } catch (error) {
+      console.error('Share error:', error);
+      Alert.alert('Error', 'Failed to share image');
+    }
+  };
+
+  const processFurther = () => {
+    // Placeholder for additional processing like applying filters, adjusting overlays, etc.
+    Alert.alert('Process Further', 'Additional processing features coming soon!');
+    setShowCaptureOptions(false);
+  };
+
+  const dismissCaptureOptions = () => {
+    setShowCaptureOptions(false);
+    setCapturedImage(null);
+  };
+
   const handleCameraReady = () => {
     setCameraReady(true);
     // Start frame processing when camera is ready and real-time pose is enabled
     if (isARMode && arSettings.enableRealTimePose) {
-      startFrameProcessing();
+      // Add a small delay to ensure camera is fully initialized before starting frame processing
+      setTimeout(() => {
+        startFrameProcessing();
+      }, 500);
     }
   };
 
-  // Optimized function to start real-time frame processing with adaptive intervals
+  // Optimized function to start real-time frame processing with adaptive intervals and stability
   const startFrameProcessing = () => {
     if (frameProcessingTimer.current) {
       clearInterval(frameProcessingTimer.current);
@@ -274,8 +356,18 @@ export default function CameraScreen() {
     // Initialize adaptive frame rate manager
     adaptiveFrameRateManager.reset();
 
+    let consecutiveErrors = 0;
+    const maxConsecutiveErrors = 5; // Increased from 3
+    let processingPaused = false;
+    let pauseTimeout: NodeJS.Timeout | null = null;
+
     const processFrame = async () => {
-      if (!isProcessingFrame && cameraRef.current && isARMode && arSettings.enableRealTimePose) {
+      // Skip processing if paused due to errors
+      if (processingPaused || isProcessingFrame || !cameraRef.current || !isARMode || !arSettings.enableRealTimePose) {
+        return;
+      }
+
+      try {
         const startTime = Date.now();
         await processCameraFrame();
         const processingTime = Date.now() - startTime;
@@ -286,29 +378,66 @@ export default function CameraScreen() {
 
         // Update performance monitor
         performanceMonitor.recordFrame(processingTime);
+
+        // Reset error counter on successful frame
+        consecutiveErrors = 0;
+
+        // Clear any pause timeout
+        if (pauseTimeout) {
+          clearTimeout(pauseTimeout);
+          pauseTimeout = null;
+        }
+        processingPaused = false;
+
+      } catch (error) {
+        consecutiveErrors++;
+        console.error(`Frame processing error (${consecutiveErrors}/${maxConsecutiveErrors}):`, error);
+
+        // If too many consecutive errors, pause processing temporarily
+        if (consecutiveErrors >= maxConsecutiveErrors) {
+          console.log('Too many consecutive errors, pausing frame processing for recovery...');
+          processingPaused = true;
+
+          // Temporarily increase debounce to reduce flickering
+          setPoseUpdateDebounce(prev => Math.min(prev + 100, 500)); // Increased increment
+
+          // Resume processing after a delay
+          pauseTimeout = setTimeout(() => {
+            console.log('Resuming frame processing after error recovery...');
+            consecutiveErrors = 0;
+            processingPaused = false;
+            setPoseUpdateDebounce(150); // Reset to higher baseline
+          }, 2000); // 2 second pause
+        }
       }
     };
 
-    // Start with adaptive frame rate
-    const initialInterval = adaptiveFrameRateManager.getFrameInterval();
+    // Start with more conservative initial interval to reduce shuttering
+    const initialInterval = Math.max(adaptiveFrameRateManager.getFrameInterval(), 400); // Increased from 200ms
     frameProcessingTimer.current = setInterval(processFrame, initialInterval);
 
-    // Update interval dynamically based on performance
+    // Update interval dynamically based on performance (less frequent updates)
     const adaptiveIntervalTimer = setInterval(() => {
-      if (frameProcessingTimer.current) {
+      if (frameProcessingTimer.current && !processingPaused) {
         clearInterval(frameProcessingTimer.current);
-        const adaptiveInterval = adaptiveFrameRateManager.getFrameInterval();
+        const adaptiveInterval = Math.max(adaptiveFrameRateManager.getFrameInterval(), 300); // Minimum 300ms
         frameProcessingTimer.current = setInterval(processFrame, adaptiveInterval);
       }
-    }, 2000); // Check every 2 seconds
+    }, 5000); // Check every 5 seconds (increased from 3)
 
     // Store adaptive timer for cleanup
     (frameProcessingTimer as any).adaptiveTimer = adaptiveIntervalTimer;
   };
 
-  // Optimized function to process camera frame for pose detection
+  // Optimized function to process camera frame for pose detection with debouncing
   const processCameraFrame = async () => {
     if (isProcessingFrame) return;
+
+    const currentTime = Date.now();
+    // Debounce pose updates to prevent flickering
+    if (currentTime - lastPoseUpdate < poseUpdateDebounce) {
+      return;
+    }
 
     setIsProcessingFrame(true);
     const startTime = Date.now();
@@ -316,7 +445,7 @@ export default function CameraScreen() {
     try {
       // Use optimized photo capture settings for better performance
       const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.1, // Further reduced quality for faster processing
+        quality: 0.02, // Even lower quality for minimal shuttering
         base64: false,
         exif: false,
         skipProcessing: true, // Skip additional processing for speed
@@ -325,43 +454,53 @@ export default function CameraScreen() {
       // Process the captured frame for pose detection
       const poseResult = await detectBodyPose(photo.uri);
 
-      // Update overlay if clothing is selected (single layer mode)
-      if (selectedClothing && !multiLayerMode) {
-        const targetUri = selectedClothing.virtual_tryon_images?.[0] || selectedClothing.images?.[0] || selectedClothing.imageUri;
-        let dims = selectedClothingDimensions;
-        if (!dims && targetUri) {
-          try {
-            dims = await new Promise<{ width: number; height: number }>((resolve, reject) => {
-              Image.getSize(
-                targetUri,
-                (w, h) => resolve({ width: w, height: h }),
-                (e) => resolve({ width: 200, height: 300 })
-              );
-            });
-            setSelectedClothingDimensions(dims);
-          } catch {}
+      // Only update pose if we have valid results and enough time has passed
+      if (poseResult && poseResult.landmarks) {
+        setLastPoseUpdate(currentTime);
+        setBodyPose(poseResult);
+        setPoseDetectionError(null); // Clear any previous errors
+
+        // Update overlay if clothing is selected (single layer mode)
+        if (selectedClothing && !multiLayerMode) {
+          const targetUri = selectedClothing.virtual_tryon_images?.[0] || selectedClothing.images?.[0] || selectedClothing.imageUri;
+          let dims = selectedClothingDimensions;
+          if (!dims && targetUri) {
+            try {
+              dims = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+                Image.getSize(
+                  targetUri,
+                  (w, h) => resolve({ width: w, height: h }),
+                  (e) => resolve({ width: 200, height: 300 })
+                );
+              });
+              setSelectedClothingDimensions(dims);
+            } catch {}
+          }
+          const imageDimensions = dims || { width: 200, height: 300 };
+
+          // Get anchor points for the selected clothing
+          const anchorPoints = selectedClothing.virtual_tryon_anchor_points?.find(
+            (ap: any) => ap.imageIndex === 0
+          )?.anchorPoints;
+
+          const overlay = await renderClothingOverlay(selectedClothing, poseResult, imageDimensions, userMeasurements);
+          setClothingOverlay(overlay);
         }
-        const imageDimensions = dims || { width: 200, height: 300 };
 
-        // Get anchor points for the selected clothing
-        const anchorPoints = selectedClothing.virtual_tryon_anchor_points?.find(
-          (ap: any) => ap.imageIndex === 0
-        )?.anchorPoints;
-
-        const overlay = await renderClothingOverlay(selectedClothing, poseResult, imageDimensions, userMeasurements);
-        setClothingOverlay(overlay);
-      }
-
-      // Update multi-layer clothing if in multi-layer mode
-      if (multiLayerMode) {
-        const updatedLayers = updateClothingLayers(poseResult, userMeasurements);
-        setClothingLayers(updatedLayers);
+        // Update multi-layer clothing if in multi-layer mode
+        if (multiLayerMode) {
+          const updatedLayers = updateClothingLayers(poseResult, userMeasurements);
+          setClothingLayers(updatedLayers);
+        }
+      } else {
+        // If pose detection fails, try to maintain existing overlays with fallback positioning
+        console.warn('Pose detection failed, attempting fallback positioning...');
+        await handleFallbackOverlayPositioning();
       }
 
       // Update performance metrics with optimized calculation
       const processingTime = Date.now() - startTime;
       frameCount.current++;
-      const currentTime = Date.now();
       const timeDiff = currentTime - lastFrameTime.current;
 
       if (timeDiff >= 1000) { // Update FPS every second
@@ -378,8 +517,68 @@ export default function CameraScreen() {
     } catch (error) {
       console.error('Error processing camera frame:', error);
       setPoseDetectionError('Failed to process camera frame');
+
+      // On error, try fallback positioning
+      await handleFallbackOverlayPositioning();
     } finally {
       setIsProcessingFrame(false);
+    }
+  };
+
+  // Fallback overlay positioning when pose detection fails
+  const handleFallbackOverlayPositioning = async () => {
+    if (!selectedClothing) return;
+
+    try {
+      // Create fallback pose data based on screen center
+      const fallbackPose = {
+        landmarks: {
+          nose: { x: screenWidth / 2, y: screenHeight * 0.25 },
+          leftShoulder: { x: screenWidth / 2 - 80, y: screenHeight * 0.35 },
+          rightShoulder: { x: screenWidth / 2 + 80, y: screenHeight * 0.35 },
+          leftElbow: { x: screenWidth / 2 - 100, y: screenHeight * 0.45 },
+          rightElbow: { x: screenWidth / 2 + 100, y: screenHeight * 0.45 },
+          leftWrist: { x: screenWidth / 2 - 80, y: screenHeight * 0.55 },
+          rightWrist: { x: screenWidth / 2 + 80, y: screenHeight * 0.55 },
+          leftHip: { x: screenWidth / 2 - 60, y: screenHeight * 0.5 },
+          rightHip: { x: screenWidth / 2 + 60, y: screenHeight * 0.5 },
+          leftKnee: { x: screenWidth / 2 - 50, y: screenHeight * 0.65 },
+          rightKnee: { x: screenWidth / 2 + 50, y: screenHeight * 0.65 },
+          leftAnkle: { x: screenWidth / 2 - 40, y: screenHeight * 0.8 },
+          rightAnkle: { x: screenWidth / 2 + 40, y: screenHeight * 0.8 },
+        },
+        boundingBox: {
+          x: screenWidth / 2 - 100,
+          y: screenHeight * 0.25,
+          width: 200,
+          height: screenHeight * 0.55
+        }
+      };
+
+      // Get clothing dimensions
+      const targetUri = selectedClothing.virtual_tryon_images?.[0] || selectedClothing.images?.[0] || selectedClothing.imageUri;
+      let dims = selectedClothingDimensions;
+      if (!dims && targetUri) {
+        try {
+          dims = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+            Image.getSize(
+              targetUri,
+              (w, h) => resolve({ width: w, height: h }),
+              (e) => resolve({ width: 200, height: 300 })
+            );
+          });
+          setSelectedClothingDimensions(dims);
+        } catch {}
+      }
+      const imageDimensions = dims || { width: 200, height: 300 };
+
+      // Render overlay with fallback pose
+      const overlay = await renderClothingOverlay(selectedClothing, fallbackPose, imageDimensions, userMeasurements);
+      setClothingOverlay(overlay);
+
+      console.log('Applied fallback overlay positioning');
+    } catch (error) {
+      console.error('Error in fallback overlay positioning:', error);
     }
   };
 
@@ -408,44 +607,120 @@ export default function CameraScreen() {
     setPoseDetectionError(null);
 
     try {
+      // Get clothing dimensions first
+      const targetUri = item.virtual_tryon_images?.[0] || item.images?.[0] || item.imageUri;
+      let dims = null as { width: number; height: number } | null;
+      if (targetUri) {
+        try {
+          dims = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+            Image.getSize(
+              targetUri,
+              (w, h) => resolve({ width: w, height: h }),
+              (e) => resolve({ width: 200, height: 300 })
+            );
+          });
+          setSelectedClothingDimensions(dims);
+        } catch {}
+      }
+      const imageDimensions = dims || { width: 200, height: 300 };
+
       if (multiLayerMode) {
         // Add to multi-layer system
         const layerIndex = clothingLayers.length;
         const newLayer = addClothingLayer(item, layerIndex);
         setClothingLayers(prev => [...prev, newLayer]);
       } else {
-        // Single layer mode
-        // If real-time processing is not active, do a one-time pose detection
-        if (!isARMode || !frameProcessingTimer.current) {
-          const pose = await detectBodyPose();
-          setBodyPose(pose);
+        // Single layer mode - always try to show overlay, even without pose detection
+        let overlay: ClothingOverlay | null = null;
 
-          // Calculate overlay position based on body pose with measurement integration
-          const targetUri = item.virtual_tryon_images?.[0] || item.images?.[0] || item.imageUri;
-          let dims = null as { width: number; height: number } | null;
-          if (targetUri) {
-            try {
-              dims = await new Promise<{ width: number; height: number }>((resolve, reject) => {
-                Image.getSize(
-                  targetUri,
-                  (w, h) => resolve({ width: w, height: h }),
-                  (e) => resolve({ width: 200, height: 300 })
-                );
-              });
-              setSelectedClothingDimensions(dims);
-            } catch {}
+        // Try real-time pose detection first
+        if (isARMode && frameProcessingTimer.current && bodyPose) {
+          // Use existing pose data if available
+          overlay = await renderClothingOverlay(item, bodyPose, imageDimensions, userMeasurements);
+        } else {
+          // Try one-time pose detection
+          try {
+            const pose = await detectBodyPose();
+            if (pose && pose.landmarks) {
+              setBodyPose(pose);
+              overlay = await renderClothingOverlay(item, pose, imageDimensions, userMeasurements);
+            }
+          } catch (poseError) {
+            console.warn('Pose detection failed, using fallback positioning:', poseError);
           }
-          const imageDimensions = dims || { width: 200, height: 300 };
-          const overlay = await renderClothingOverlay(item, pose, imageDimensions, userMeasurements);
-          setClothingOverlay(overlay);
         }
-        // If real-time processing is active, overlay will be updated automatically
+
+        // If no overlay from pose detection, use fallback positioning
+        if (!overlay) {
+          console.log('Using fallback overlay positioning for clothing selection');
+          const fallbackPose = {
+            landmarks: {
+              nose: { x: screenWidth / 2, y: screenHeight * 0.25 },
+              leftShoulder: { x: screenWidth / 2 - 80, y: screenHeight * 0.35 },
+              rightShoulder: { x: screenWidth / 2 + 80, y: screenHeight * 0.35 },
+              leftElbow: { x: screenWidth / 2 - 100, y: screenHeight * 0.45 },
+              rightElbow: { x: screenWidth / 2 + 100, y: screenHeight * 0.45 },
+              leftWrist: { x: screenWidth / 2 - 80, y: screenHeight * 0.55 },
+              rightWrist: { x: screenWidth / 2 + 80, y: screenHeight * 0.55 },
+              leftHip: { x: screenWidth / 2 - 60, y: screenHeight * 0.5 },
+              rightHip: { x: screenWidth / 2 + 60, y: screenHeight * 0.5 },
+              leftKnee: { x: screenWidth / 2 - 50, y: screenHeight * 0.65 },
+              rightKnee: { x: screenWidth / 2 + 50, y: screenHeight * 0.65 },
+              leftAnkle: { x: screenWidth / 2 - 40, y: screenHeight * 0.8 },
+              rightAnkle: { x: screenWidth / 2 + 40, y: screenHeight * 0.8 },
+            },
+            boundingBox: {
+              x: screenWidth / 2 - 100,
+              y: screenHeight * 0.25,
+              width: 200,
+              height: screenHeight * 0.55
+            }
+          };
+
+          overlay = await renderClothingOverlay(item, fallbackPose, imageDimensions, userMeasurements);
+        }
+
+        setClothingOverlay(overlay);
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to apply clothing overlay';
       setPoseDetectionError(errorMessage);
       Alert.alert('Error', errorMessage);
       console.error('Error selecting clothing item:', error);
+
+      // Even on error, try to show a basic overlay
+      try {
+        const fallbackPose = {
+          landmarks: {
+            nose: { x: screenWidth / 2, y: screenHeight * 0.25 },
+            leftShoulder: { x: screenWidth / 2 - 80, y: screenHeight * 0.35 },
+            rightShoulder: { x: screenWidth / 2 + 80, y: screenHeight * 0.35 },
+            leftElbow: { x: screenWidth / 2 - 100, y: screenHeight * 0.45 },
+            rightElbow: { x: screenWidth / 2 + 100, y: screenHeight * 0.45 },
+            leftWrist: { x: screenWidth / 2 - 80, y: screenHeight * 0.55 },
+            rightWrist: { x: screenWidth / 2 + 80, y: screenHeight * 0.55 },
+            leftHip: { x: screenWidth / 2 - 60, y: screenHeight * 0.5 },
+            rightHip: { x: screenWidth / 2 + 60, y: screenHeight * 0.5 },
+            leftKnee: { x: screenWidth / 2 - 50, y: screenHeight * 0.65 },
+            rightKnee: { x: screenWidth / 2 + 50, y: screenHeight * 0.65 },
+            leftAnkle: { x: screenWidth / 2 - 40, y: screenHeight * 0.8 },
+            rightAnkle: { x: screenWidth / 2 + 40, y: screenHeight * 0.8 },
+          },
+          boundingBox: {
+            x: screenWidth / 2 - 100,
+            y: screenHeight * 0.25,
+            width: 200,
+            height: screenHeight * 0.55
+          }
+        };
+
+        const imageDimensions = selectedClothingDimensions || { width: 200, height: 300 };
+        const overlay = await renderClothingOverlay(item, fallbackPose, imageDimensions, userMeasurements);
+        setClothingOverlay(overlay);
+        console.log('Applied fallback overlay on error');
+      } catch (fallbackError) {
+        console.error('Fallback overlay also failed:', fallbackError);
+      }
     } finally {
       setIsLoading(false);
       setIsLoadingPose(false);
@@ -482,12 +757,18 @@ export default function CameraScreen() {
     // Handle real-time pose detection toggle
     if (setting === 'enableRealTimePose') {
       if (newSettings.enableRealTimePose && isARMode && cameraReady) {
+        // Reset debounce when enabling real-time pose
+        setPoseUpdateDebounce(100);
+        setLastPoseUpdate(0);
         startFrameProcessing();
       } else {
         if (frameProcessingTimer.current) {
           clearInterval(frameProcessingTimer.current);
           frameProcessingTimer.current = null;
         }
+        // Clear pose data when disabling to prevent stale overlays
+        setBodyPose(null);
+        setClothingOverlay(null);
       }
     }
   };
@@ -548,7 +829,10 @@ export default function CameraScreen() {
             // Start frame processing if real-time pose is enabled
             if (arSettings.enableRealTimePose) {
               console.log('🔍 DEBUG: Starting frame processing...');
-              startFrameProcessing();
+              // Add delay to prevent immediate shuttering on initialization
+              setTimeout(() => {
+                startFrameProcessing();
+              }, 1000);
             }
           } catch (error) {
             console.error('🔍 DEBUG: Error initializing pose detection:', error);
@@ -621,10 +905,9 @@ export default function CameraScreen() {
         facing={cameraType}
         flash={flashMode}
         onCameraReady={handleCameraReady}
-        ratio="4:3"
       >
         {/* Single layer clothing overlay */}
-        {isARMode && cameraReady && clothingOverlay && !multiLayerMode && (
+        {isARMode && cameraReady && clothingOverlay && !multiLayerMode && bodyPose && (
           <Animated.View
             style={[
               styles.clothingOverlay,
@@ -634,7 +917,8 @@ export default function CameraScreen() {
                 width: 200 * clothingOverlay.scale,
                 height: 300 * clothingOverlay.scale,
                 transform: [
-                  { rotate: `${clothingOverlay.rotation}deg` }
+                  { rotate: `${clothingOverlay.rotation}deg` },
+                  { scaleX: clothingOverlay.aspectRatio ? clothingOverlay.aspectRatio : 1 }
                 ],
                 opacity: clothingOverlay.opacity,
               }
@@ -649,7 +933,7 @@ export default function CameraScreen() {
         )}
 
         {/* Multi-layer clothing overlays */}
-        {isARMode && cameraReady && multiLayerMode && clothingLayers.map((layer) => (
+        {isARMode && cameraReady && multiLayerMode && bodyPose && clothingLayers.map((layer) => (
           layer.visible && (
             <Animated.View
               key={layer.id}
@@ -661,7 +945,8 @@ export default function CameraScreen() {
                   width: 200 * layer.clothing.scale,
                   height: 300 * layer.clothing.scale,
                   transform: [
-                    { rotate: `${layer.clothing.rotation}deg` }
+                    { rotate: `${layer.clothing.rotation}deg` },
+                    { scaleX: layer.clothing.aspectRatio ? layer.clothing.aspectRatio : 1 }
                   ],
                   opacity: layer.clothing.opacity,
                   zIndex: layer.zIndex,
@@ -815,7 +1100,7 @@ export default function CameraScreen() {
             >
               <View style={[styles.captureButtonInner, { backgroundColor: theme.colors.primary }]}>
                 <Ionicons
-                  name={isARMode ? 'play' : 'camera'}
+                  name="camera"
                   size={rf(28)}
                   color={theme.colors.surface}
                 />
@@ -996,6 +1281,62 @@ export default function CameraScreen() {
         onComplete={() => setShowTutorial(false)}
         onSkip={() => setShowTutorial(false)}
       />
+
+      {/* Capture Options Modal */}
+      <Portal>
+        <Modal
+          visible={showCaptureOptions}
+          onDismiss={dismissCaptureOptions}
+          contentContainerStyle={styles.captureOptionsModal}
+        >
+          <View style={styles.captureOptionsContent}>
+            <Text style={styles.captureOptionsTitle}>AR Image Captured!</Text>
+            <Text style={styles.captureOptionsSubtitle}>What would you like to do with your virtual try-on image?</Text>
+
+            {capturedImage && (
+              <Image
+                source={{ uri: capturedImage.uri }}
+                style={styles.capturedImagePreview}
+                resizeMode="contain"
+              />
+            )}
+
+            <View style={styles.captureOptionsButtons}>
+              <TouchableOpacity
+                style={[styles.captureOptionButton, { backgroundColor: theme.colors.primary }]}
+                onPress={saveToGallery}
+              >
+                <Ionicons name="download" size={20} color={theme.colors.surface} />
+                <Text style={[styles.captureOptionButtonText, { color: theme.colors.surface }]}>Save to Gallery</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.captureOptionButton, { backgroundColor: theme.colors.secondary }]}
+                onPress={shareImage}
+              >
+                <Ionicons name="share" size={20} color={theme.colors.onSecondary} />
+                <Text style={[styles.captureOptionButtonText, { color: theme.colors.onSecondary }]}>Share</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.captureOptionButton, { backgroundColor: theme.colors.tertiary }]}
+                onPress={processFurther}
+              >
+                <Ionicons name="color-palette" size={20} color={theme.colors.onTertiary} />
+                <Text style={[styles.captureOptionButtonText, { color: theme.colors.onTertiary }]}>Process Further</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Button
+              mode="outlined"
+              onPress={dismissCaptureOptions}
+              style={styles.dismissButton}
+            >
+              Dismiss
+            </Button>
+          </View>
+        </Modal>
+      </Portal>
     </SafeAreaView>
   );
 }
@@ -1018,6 +1359,8 @@ const styles = StyleSheet.create({
   },
   camera: {
     flex: 1,
+    width: screenWidth,
+    height: screenHeight,
   },
   clothingOverlay: {
     position: 'absolute',
@@ -1253,5 +1596,55 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.8)',
     borderRadius: rw(10),
     padding: wp(0.5),
+  },
+  captureOptionsModal: {
+    margin: wp(5),
+    backgroundColor: '#FFFFFF',
+    borderRadius: wp(3),
+    padding: wp(5),
+  },
+  captureOptionsContent: {
+    alignItems: 'center',
+  },
+  captureOptionsTitle: {
+    fontSize: rf(20),
+    fontWeight: 'bold',
+    color: '#000000',
+    marginBottom: hp(1),
+  },
+  captureOptionsSubtitle: {
+    fontSize: rf(16),
+    color: '#666666',
+    marginBottom: hp(2),
+    textAlign: 'center',
+  },
+  capturedImagePreview: {
+    width: wp(60),
+    height: wp(60),
+    borderRadius: wp(2),
+    marginBottom: hp(2),
+  },
+  captureOptionsButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    width: '100%',
+    marginBottom: hp(2),
+  },
+  captureOptionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: wp(4),
+    paddingVertical: hp(1.5),
+    borderRadius: wp(2),
+    minWidth: wp(25),
+    justifyContent: 'center',
+  },
+  captureOptionButtonText: {
+    fontSize: rf(14),
+    fontWeight: '600',
+    marginLeft: wp(1),
+  },
+  dismissButton: {
+    width: '100%',
   },
 });

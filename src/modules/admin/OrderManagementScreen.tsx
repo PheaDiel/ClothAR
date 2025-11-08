@@ -23,10 +23,15 @@ interface Order {
   total_amount: number;
   created_at: string;
   user_name?: string;
+  user_phone?: string;
+  user_address?: string;
   item_count?: number;
+  product_names?: string[];
   payment_status?: string;
   payment_method?: string;
   requires_tailoring?: boolean;
+  material_provided_by_customer?: boolean;
+  measurement_info?: string;
 }
 
 const OrderManagementScreen = () => {
@@ -76,7 +81,10 @@ const OrderManagementScreen = () => {
         .select(`
           *,
           order_items (
-            quantity
+            quantity,
+            product_name,
+            material_provided_by_customer,
+            measurement_snapshot
           )
         `)
         .order('payment_status', { ascending: false }) // Paid orders first
@@ -88,16 +96,31 @@ const OrderManagementScreen = () => {
       const transformedOrders: Order[] = await Promise.all(
         (ordersData || []).map(async (order: any) => {
           let userName = 'Unknown User';
+          let userPhone = '';
+          let userAddress = '';
           try {
             const { data: userProfile } = await supabase
               .from('profiles')
-              .select('name')
+              .select('name, phone, province_name, city_name, barangay')
               .eq('id', order.user_id)
               .single();
             userName = userProfile?.name || 'Unknown User';
+            userPhone = userProfile?.phone || '';
+            userAddress = [userProfile?.barangay, userProfile?.city_name, userProfile?.province_name]
+              .filter(Boolean)
+              .join(', ') || '';
           } catch (profileError) {
             console.warn('Could not fetch profile for user:', order.user_id, profileError);
           }
+
+          // Collect unique product names
+          const productNames = order.order_items?.map((item: any) => item.product_name).filter((name: any) => name) || [];
+          const uniqueProductNames = [...new Set(productNames)] as string[];
+
+          // Check material provision and measurement info
+          const materialProvidedByCustomer = order.order_items?.some((item: any) => item.material_provided_by_customer) || false;
+          const hasMeasurements = order.order_items?.some((item: any) => item.measurement_snapshot && Object.keys(item.measurement_snapshot).length > 0) || false;
+          const measurementInfo = hasMeasurements ? 'Measurements provided' : 'Measurement consultation needed';
 
           return {
             id: order.id,
@@ -107,10 +130,15 @@ const OrderManagementScreen = () => {
             total_amount: order.total_amount,
             created_at: order.created_at,
             user_name: userName,
+            user_phone: userPhone,
+            user_address: userAddress,
             item_count: order.order_items?.reduce((sum: number, item: any) => sum + item.quantity, 0) || 0,
+            product_names: uniqueProductNames,
             payment_status: order.payment_status,
             payment_method: order.payment_method,
             requires_tailoring: order.requires_tailoring,
+            material_provided_by_customer: materialProvidedByCustomer,
+            measurement_info: measurementInfo,
           };
         })
       );
@@ -164,16 +192,86 @@ const OrderManagementScreen = () => {
 
   const handleUpdateStatus = async (order: Order, newStatus: string) => {
     try {
-      // TODO: Implement actual order status update API call
-      // For now, just update local state
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        Alert.alert('Error', 'User not authenticated');
+        return;
+      }
+
+      // Check if user is admin
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+
+      if (!['admin', 'shop_owner'].includes(profile?.role)) {
+        Alert.alert('Error', 'Unauthorized to update order status. Admin access required.');
+        return;
+      }
+
+      // Update order status in database
+      const { error } = await supabase
+        .from('orders')
+        .update({
+          status: newStatus,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', order.id);
+
+      if (error) throw error;
+
+      // Update local state
       const updatedOrders = orders.map(o =>
         o.id === order.id ? { ...o, status: newStatus as Order['status'] } : o
       );
       setOrders(updatedOrders);
-      Alert.alert('Success', `Order status updated to ${newStatus}`);
-    } catch (error) {
-      Alert.alert('Error', 'Failed to update order status');
+      Alert.alert('Success', `Order status updated to ${newStatus.replace('_', ' ')}`);
+    } catch (error: any) {
+      console.error('Error updating order status:', error);
+      Alert.alert('Error', `Failed to update order status: ${error.message}`);
     }
+  };
+
+  const handleDeleteOrder = async (order: Order) => {
+    Alert.alert(
+      'Delete Order',
+      `Are you sure you want to delete order ${order.order_number} for ${order.user_name}? This action cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              // Delete order items first (due to foreign key constraints)
+              const { error: itemsError } = await supabase
+                .from('order_items')
+                .delete()
+                .eq('order_id', order.id);
+
+              if (itemsError) throw itemsError;
+
+              // Delete the order
+              const { error: orderError } = await supabase
+                .from('orders')
+                .delete()
+                .eq('id', order.id);
+
+              if (orderError) throw orderError;
+
+              // Update local state
+              const updatedOrders = orders.filter(o => o.id !== order.id);
+              setOrders(updatedOrders);
+              Alert.alert('Success', `Order ${order.order_number} has been deleted`);
+            } catch (error: any) {
+              console.error('Delete order error:', error);
+              Alert.alert('Error', `Failed to delete order: ${error.message}`);
+            }
+          }
+        }
+      ]
+    );
   };
 
   const renderOrderItem = ({ item }: { item: Order }) => (
@@ -193,41 +291,65 @@ const OrderManagementScreen = () => {
         </View>
 
         <View style={styles.orderDetails}>
-           <View style={styles.detailRow}>
-             <Ionicons name="calendar-outline" size={16} color={theme.colors.textSecondary} />
-             <Text style={styles.detailText}>
-               {new Date(item.created_at).toLocaleDateString()}
-             </Text>
-           </View>
+            <View style={styles.detailRow}>
+              <Ionicons name="calendar-outline" size={16} color={theme.colors.textSecondary} />
+              <Text style={styles.detailText}>
+                {new Date(item.created_at).toLocaleDateString()}
+              </Text>
+            </View>
 
-           <View style={styles.detailRow}>
-             <Ionicons name="cube-outline" size={16} color={theme.colors.textSecondary} />
-             <Text style={styles.detailText}>{item.item_count} items</Text>
-           </View>
+            <View style={styles.detailRow}>
+              <Ionicons name="cube-outline" size={16} color={theme.colors.textSecondary} />
+              <Text style={styles.detailText}>
+                {item.item_count} item{item.item_count !== 1 ? 's' : ''}: {item.product_names?.join(', ') || 'Unknown products'}
+              </Text>
+            </View>
 
-           <View style={styles.detailRow}>
-             <Ionicons name="cash-outline" size={16} color={theme.colors.primary} />
-             <Text style={styles.amountText}>₱{item.total_amount.toLocaleString()}</Text>
-           </View>
+            <View style={styles.detailRow}>
+              <Ionicons name="cash-outline" size={16} color={theme.colors.primary} />
+              <Text style={styles.amountText}>₱{item.total_amount.toLocaleString()}</Text>
+            </View>
 
-           {item.payment_status && (
-             <View style={styles.detailRow}>
-               <Ionicons name="card-outline" size={16} color={item.payment_status === 'paid' ? theme.colors.success : theme.colors.warning} />
-               <Text style={[styles.detailText, { color: item.payment_status === 'paid' ? theme.colors.success : theme.colors.warning }]}>
-                 {item.payment_status === 'paid' ? 'Paid' : 'Pending Payment'}
-               </Text>
-             </View>
-           )}
+            {item.payment_method && (
+              <View style={styles.detailRow}>
+                <Ionicons name="card-outline" size={16} color={item.payment_status === 'paid' ? theme.colors.success : theme.colors.warning} />
+                <Text style={[styles.detailText, { color: item.payment_status === 'paid' ? theme.colors.success : theme.colors.warning }]}>
+                  {item.payment_method} {item.payment_status === 'paid' ? '(Paid)' : '(Pending)'}
+                </Text>
+              </View>
+            )}
 
-           {item.requires_tailoring && (
-             <View style={styles.detailRow}>
-               <Ionicons name="cut-outline" size={16} color={theme.colors.secondary} />
-               <Text style={[styles.detailText, { color: theme.colors.secondary }]}>
-                 Requires Tailoring
-               </Text>
-             </View>
-           )}
-         </View>
+            <View style={styles.detailRow}>
+              <Ionicons name="person-outline" size={16} color={theme.colors.textSecondary} />
+              <Text style={styles.detailText}>
+                {item.user_name}
+                {item.user_phone ? ` • ${item.user_phone}` : ''}
+              </Text>
+            </View>
+
+            {item.user_address && (
+              <View style={styles.detailRow}>
+                <Ionicons name="location-outline" size={16} color={theme.colors.textSecondary} />
+                <Text style={styles.detailText}>
+                  {item.user_address}
+                </Text>
+              </View>
+            )}
+
+            <View style={styles.detailRow}>
+              <Ionicons name="shirt-outline" size={16} color={theme.colors.secondary} />
+              <Text style={[styles.detailText, { color: theme.colors.secondary }]}>
+                Material: {item.material_provided_by_customer ? 'Customer Provided' : 'Store Provided'}
+              </Text>
+            </View>
+
+            <View style={styles.detailRow}>
+              <Ionicons name="body-outline" size={16} color={theme.colors.secondary} />
+              <Text style={[styles.detailText, { color: theme.colors.secondary }]}>
+                {item.measurement_info}
+              </Text>
+            </View>
+          </View>
 
         <View style={styles.orderActions}>
           <Button
@@ -238,21 +360,32 @@ const OrderManagementScreen = () => {
             View Details
           </Button>
 
-          {item.status !== 'delivered' && item.status !== 'cancelled' && (
+          <View style={styles.actionButtons}>
+            {item.status !== 'delivered' && item.status !== 'cancelled' && (
+              <Button
+                mode="contained"
+                onPress={() => {
+                  const currentIndex = orderStatuses.indexOf(item.status);
+                  const nextStatus = orderStatuses[currentIndex + 1];
+                  if (nextStatus) {
+                    handleUpdateStatus(item, nextStatus);
+                  }
+                }}
+                style={styles.updateButton}
+              >
+                Advance Status
+              </Button>
+            )}
+
             <Button
-              mode="contained"
-              onPress={() => {
-                const currentIndex = orderStatuses.indexOf(item.status);
-                const nextStatus = orderStatuses[currentIndex + 1];
-                if (nextStatus) {
-                  handleUpdateStatus(item, nextStatus);
-                }
-              }}
-              style={styles.updateButton}
+              mode="outlined"
+              onPress={() => handleDeleteOrder(item)}
+              style={styles.deleteButton}
+              color={theme.colors.danger}
             >
-              Advance Status
+              Delete
             </Button>
-          )}
+          </View>
         </View>
       </Card.Content>
     </Card>
@@ -431,9 +564,16 @@ const styles = StyleSheet.create({
     flex: 1,
     marginRight: wp(2),
   },
+  actionButtons: {
+    flexDirection: 'row',
+    flex: 1,
+  },
   updateButton: {
     flex: 1,
-    marginLeft: wp(2),
+    marginRight: wp(2),
+  },
+  deleteButton: {
+    flex: 1,
   },
   emptyContainer: {
     flex: 1,

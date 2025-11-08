@@ -13,6 +13,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { theme } from '../../theme/theme';
 import { hp, wp, rf } from '../../utils/responsiveUtils';
 import Loading from '../../components/Loading';
+import { supabase } from '../../services/supabase';
 
 interface OrderItem {
   id: string;
@@ -31,11 +32,15 @@ interface Order {
   user_name: string;
   user_email: string;
   user_phone?: string;
+  user_address?: string;
   status: 'pending' | 'confirmed' | 'processing' | 'tailoring' | 'quality_check' | 'ready_for_delivery' | 'shipped' | 'delivered' | 'cancelled' | 'refunded';
   total_amount: number;
   created_at: string;
   items: OrderItem[];
-  shipping_address?: any;
+  payment_method?: string;
+  payment_status?: string;
+  material_provided_by_customer?: boolean;
+  measurement_info?: string;
   notes?: string;
 }
 
@@ -60,42 +65,103 @@ const OrderDetailsScreen = () => {
 
   const loadOrderDetails = async () => {
     try {
-      // Mock data - replace with actual API call
-      const mockOrder: Order = {
-        id: orderId || '1',
-        order_number: '20240115001',
-        user_id: 'user1',
-        user_name: 'John Doe',
-        user_email: 'john.doe@example.com',
-        user_phone: '+63 912 345 6789',
-        status: 'pending',
-        total_amount: 2500,
-        created_at: '2024-01-15T10:00:00Z',
-        items: [
-          {
-            id: '1',
-            product_name: 'Classic White Shirt',
-            variant_info: 'Size: M, Color: White',
-            quantity: 1,
-            unit_price: 2500,
-            fabric_name: 'Premium Cotton',
-            measurements: {
-              chest: 40,
-              waist: 32,
-              length: 28,
-            },
-          },
-        ],
-        shipping_address: {
-          street: '123 Main St',
-          city: 'Makati',
-          province: 'Metro Manila',
-          zip_code: '1200',
-        },
-        notes: 'Customer requested express delivery',
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        Alert.alert('Error', 'User not authenticated');
+        return;
+      }
+
+      // Check if user is admin
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+
+      if (!['admin', 'shop_owner'].includes(profile?.role)) {
+        Alert.alert('Error', 'Unauthorized to view order details. Admin access required.');
+        return;
+      }
+
+      // Fetch order details with customer profile and order items
+      const { data: orderData, error: orderError } = await supabase
+        .from('orders')
+        .select(`
+          *,
+          order_items (
+            id,
+            product_name,
+            product_description,
+            variant_details,
+            fabric_name,
+            quantity,
+            unit_price,
+            total_price,
+            material_provided_by_customer,
+            measurement_snapshot,
+            customizations
+          )
+        `)
+        .eq('id', orderId)
+        .single();
+
+      if (orderError) throw orderError;
+
+      // Fetch customer profile data
+      const { data: customerProfile, error: profileError } = await supabase
+        .from('profiles')
+        .select('name, phone, province_name, city_name, barangay')
+        .eq('id', orderData.user_id)
+        .single();
+
+      if (profileError) {
+        console.warn('Could not fetch customer profile:', profileError);
+      }
+
+      // Transform order items
+      const transformedItems: OrderItem[] = (orderData.order_items || []).map((item: any) => ({
+        id: item.id,
+        product_name: item.product_name,
+        variant_info: item.variant_details ? Object.entries(item.variant_details).map(([key, value]) => `${key}: ${value}`).join(', ') : '',
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        fabric_name: item.fabric_name,
+        measurements: item.measurement_snapshot || {},
+      }));
+
+      // Construct customer address
+      const customerAddress = customerProfile ?
+        [customerProfile.barangay, customerProfile.city_name, customerProfile.province_name]
+          .filter(Boolean)
+          .join(', ') : '';
+
+      // Determine material provision and measurement info
+      const materialProvidedByCustomer = transformedItems.some(item => item.fabric_name && item.fabric_name !== 'Store Provided');
+      const hasMeasurements = transformedItems.some(item => item.measurements && Object.keys(item.measurements).length > 0);
+      const measurementInfo = hasMeasurements ? 'Measurements provided' : 'Measurement consultation needed';
+
+      // Construct the order object
+      const order: Order = {
+        id: orderData.id,
+        order_number: orderData.order_number,
+        user_id: orderData.user_id,
+        user_name: customerProfile?.name || 'Unknown Customer',
+        user_email: '', // Email not stored in profiles, would need to be fetched from auth.users if needed
+        user_phone: customerProfile?.phone || '',
+        user_address: customerAddress,
+        status: orderData.status,
+        total_amount: orderData.total_amount,
+        created_at: orderData.created_at,
+        items: transformedItems,
+        payment_method: orderData.payment_method,
+        payment_status: orderData.payment_status,
+        material_provided_by_customer: materialProvidedByCustomer,
+        measurement_info: measurementInfo,
+        notes: orderData.tailoring_notes || '',
       };
-      setOrder(mockOrder);
-      setNotes(mockOrder.notes || '');
+
+      setOrder(order);
+      setNotes(order.notes || '');
     } catch (error) {
       console.error('Error loading order details:', error);
       Alert.alert('Error', 'Failed to load order details');
@@ -125,13 +191,40 @@ const OrderDetailsScreen = () => {
 
     setUpdatingStatus(true);
     try {
-      // Mock update - replace with actual API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        Alert.alert('Error', 'User not authenticated');
+        return;
+      }
+
+      // Check if user is admin
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+
+      if (!['admin', 'shop_owner'].includes(profile?.role)) {
+        Alert.alert('Error', 'Unauthorized to update order status. Admin access required.');
+        return;
+      }
+
+      // Update order status in database
+      const { error } = await supabase
+        .from('orders')
+        .update({
+          status: newStatus,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', order.id);
+
+      if (error) throw error;
 
       setOrder(prev => prev ? { ...prev, status: newStatus as Order['status'] } : null);
       Alert.alert('Success', `Order status updated to ${newStatus.replace('_', ' ')}`);
-    } catch (error) {
-      Alert.alert('Error', 'Failed to update order status');
+    } catch (error: any) {
+      console.error('Error updating order status:', error);
+      Alert.alert('Error', `Failed to update order status: ${error.message}`);
     } finally {
       setUpdatingStatus(false);
     }
@@ -141,13 +234,40 @@ const OrderDetailsScreen = () => {
     if (!order) return;
 
     try {
-      // Mock save - replace with actual API call
-      await new Promise(resolve => setTimeout(resolve, 500));
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        Alert.alert('Error', 'User not authenticated');
+        return;
+      }
+
+      // Check if user is admin
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+
+      if (!['admin', 'shop_owner'].includes(profile?.role)) {
+        Alert.alert('Error', 'Unauthorized to update order notes. Admin access required.');
+        return;
+      }
+
+      // Update order notes in database
+      const { error } = await supabase
+        .from('orders')
+        .update({
+          tailoring_notes: notes,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', order.id);
+
+      if (error) throw error;
 
       setOrder(prev => prev ? { ...prev, notes } : null);
       Alert.alert('Success', 'Notes saved successfully');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to save notes');
+    } catch (error: any) {
+      console.error('Error saving notes:', error);
+      Alert.alert('Error', `Failed to save notes: ${error.message}`);
     }
   };
 
@@ -239,6 +359,9 @@ const OrderDetailsScreen = () => {
               {order.user_phone && (
                 <Text style={styles.customerPhone}>{order.user_phone}</Text>
               )}
+              {order.user_address && (
+                <Text style={styles.customerAddress}>{order.user_address}</Text>
+              )}
             </View>
 
             <Button
@@ -291,22 +414,49 @@ const OrderDetailsScreen = () => {
           </Card.Content>
         </Card>
 
-        {/* Shipping Address */}
-        {order.shipping_address && (
+        {/* Payment Information */}
+        {order.payment_method && (
           <Card style={styles.card}>
             <Card.Content>
-              <Title style={styles.sectionTitle}>Shipping Address</Title>
+              <Title style={styles.sectionTitle}>Payment Information</Title>
 
-              <View style={styles.addressContainer}>
-                <Text style={styles.addressText}>{order.shipping_address.street}</Text>
-                <Text style={styles.addressText}>
-                  {order.shipping_address.city}, {order.shipping_address.province}
+              <View style={styles.paymentContainer}>
+                <Text style={styles.paymentText}>Method: {order.payment_method}</Text>
+                <Text style={[styles.paymentText, {
+                  color: order.payment_status === 'paid' ? theme.colors.success : theme.colors.warning
+                }]}>
+                  Status: {order.payment_status === 'paid' ? 'Paid' : 'Pending'}
                 </Text>
-                <Text style={styles.addressText}>{order.shipping_address.zip_code}</Text>
               </View>
             </Card.Content>
           </Card>
         )}
+
+        {/* Material Provision */}
+        <Card style={styles.card}>
+          <Card.Content>
+            <Title style={styles.sectionTitle}>Material Provision</Title>
+
+            <View style={styles.materialContainer}>
+              <Text style={styles.materialText}>
+                {order.material_provided_by_customer ? 'Customer will provide fabric' : 'Store will provide fabric'}
+              </Text>
+            </View>
+          </Card.Content>
+        </Card>
+
+        {/* Measurement Information */}
+        <Card style={styles.card}>
+          <Card.Content>
+            <Title style={styles.sectionTitle}>Measurement Information</Title>
+
+            <View style={styles.measurementContainer}>
+              <Text style={styles.measurementText}>
+                {order.measurement_info || 'No measurement information available'}
+              </Text>
+            </View>
+          </Card.Content>
+        </Card>
 
         {/* Order Notes */}
         <Card style={styles.card}>
@@ -423,6 +573,11 @@ const styles = StyleSheet.create({
     fontSize: rf(14),
     color: theme.colors.textSecondary,
   },
+  customerAddress: {
+    fontSize: rf(14),
+    color: theme.colors.textSecondary,
+    marginTop: hp(0.5),
+  },
   contactButton: {
     marginTop: hp(1),
   },
@@ -496,13 +651,27 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: theme.colors.primary,
   },
-  addressContainer: {
+  paymentContainer: {
     marginTop: hp(1),
   },
-  addressText: {
+  paymentText: {
     fontSize: rf(14),
     color: theme.colors.textSecondary,
     marginBottom: hp(0.5),
+  },
+  materialContainer: {
+    marginTop: hp(1),
+  },
+  materialText: {
+    fontSize: rf(14),
+    color: theme.colors.textSecondary,
+  },
+  measurementContainer: {
+    marginTop: hp(1),
+  },
+  measurementText: {
+    fontSize: rf(14),
+    color: theme.colors.textSecondary,
   },
   notesInput: {
     marginBottom: hp(2),

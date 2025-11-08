@@ -243,76 +243,86 @@ export class MobileTensorFlowOptimizer {
   }
 }
 
-// Adaptive frame rate manager
+// Adaptive frame rate manager with enhanced stability
 export class AdaptiveFrameRateManager {
-  private targetFps = 30;
-  private currentFps = 30;
-  private performanceHistory: number[] = [];
-  private adjustmentCooldown = 0;
+  private targetFps = 25; // Reduced default for stability
+  private currentFps = 25;
+  private processingTimes: number[] = [];
+  private maxSamples = 15; // Increased for better averaging
+  private stabilityCounter = 0;
+  private lastAdjustment = 0;
 
-  // Adjust frame rate based on device performance
-  updateFrameRate(processingTime: number, targetFps: number = 30): number {
-    this.targetFps = targetFps;
+  reset() {
+    this.processingTimes = [];
+    this.currentFps = this.targetFps;
+    this.stabilityCounter = 0;
+    this.lastAdjustment = Date.now();
+  }
 
-    // Record performance
-    this.performanceHistory.push(processingTime);
-    if (this.performanceHistory.length > 10) {
-      this.performanceHistory.shift();
+  updateFrameRate(processingTime: number): number {
+    this.processingTimes.push(processingTime);
+
+    if (this.processingTimes.length > this.maxSamples) {
+      this.processingTimes.shift();
     }
 
-    // Only adjust if cooldown period has passed
-    if (this.adjustmentCooldown > 0) {
-      this.adjustmentCooldown--;
-      return this.currentFps;
-    }
+    // Only adjust frame rate every few samples for stability
+    if (this.processingTimes.length >= 10 && this.stabilityCounter++ % 3 === 0) {
+      const avgProcessingTime = this.processingTimes.reduce((a, b) => a + b, 0) / this.processingTimes.length;
+      const targetProcessingTime = 1000 / this.targetFps;
 
-    // Calculate average processing time
-    const avgProcessingTime = this.performanceHistory.reduce((a, b) => a + b, 0) / this.performanceHistory.length;
-    const targetProcessingTime = 1000 / this.targetFps;
-
-    // Adjust frame rate based on performance
-    if (avgProcessingTime > targetProcessingTime * 1.2) {
-      // Too slow, reduce frame rate
-      this.currentFps = Math.max(15, this.currentFps - 5);
-      this.adjustmentCooldown = 30; // Wait 30 frames before next adjustment
-    } else if (avgProcessingTime < targetProcessingTime * 0.8 && this.currentFps < this.targetFps) {
-      // Fast enough, can increase frame rate
-      this.currentFps = Math.min(this.targetFps, this.currentFps + 2);
-      this.adjustmentCooldown = 30;
+      const now = Date.now();
+      // Don't adjust too frequently (minimum 2 seconds between adjustments)
+      if (now - this.lastAdjustment > 2000) {
+        if (avgProcessingTime > targetProcessingTime * 1.5) {
+          // Significantly too slow, reduce frame rate more aggressively
+          this.currentFps = Math.max(8, this.currentFps - 8);
+          this.lastAdjustment = now;
+        } else if (avgProcessingTime > targetProcessingTime * 1.2) {
+          // Moderately too slow, reduce frame rate
+          this.currentFps = Math.max(10, this.currentFps - 5);
+          this.lastAdjustment = now;
+        } else if (avgProcessingTime < targetProcessingTime * 0.7 && this.currentFps < this.targetFps) {
+          // Fast enough, can gradually increase frame rate
+          this.currentFps = Math.min(this.targetFps, this.currentFps + 2);
+          this.lastAdjustment = now;
+        }
+      }
     }
 
     return this.currentFps;
   }
 
-  // Get current frame interval in milliseconds
   getFrameInterval(): number {
-    return 1000 / this.currentFps;
+    // Add some jitter to prevent synchronized processing
+    const baseInterval = Math.round(1000 / this.currentFps);
+    const jitter = Math.random() * 20 - 10; // ±10ms jitter
+    return Math.max(100, baseInterval + jitter); // Minimum 100ms interval
   }
 
-  // Reset to default frame rate
-  reset(): void {
-    this.currentFps = this.targetFps;
-    this.performanceHistory = [];
-    this.adjustmentCooldown = 0;
+  // Force a specific frame rate for critical situations
+  setFrameRate(fps: number) {
+    this.currentFps = Math.max(5, Math.min(60, fps));
+    this.lastAdjustment = Date.now();
   }
 
-  // Get current status
-  getStatus(): {
-    currentFps: number;
-    targetFps: number;
-    averageProcessingTime: number;
-    adjustmentCooldown: number;
-  } {
-    const avgProcessingTime = this.performanceHistory.length > 0
-      ? this.performanceHistory.reduce((a, b) => a + b, 0) / this.performanceHistory.length
+  // Get current performance metrics
+  getMetrics() {
+    const avgProcessingTime = this.processingTimes.length > 0
+      ? this.processingTimes.reduce((a, b) => a + b, 0) / this.processingTimes.length
       : 0;
 
     return {
       currentFps: this.currentFps,
       targetFps: this.targetFps,
       averageProcessingTime: avgProcessingTime,
-      adjustmentCooldown: this.adjustmentCooldown
+      sampleCount: this.processingTimes.length
     };
+  }
+
+  // Legacy method for compatibility
+  getStatus() {
+    return this.getMetrics();
   }
 }
 

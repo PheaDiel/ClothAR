@@ -39,6 +39,7 @@ const LazyImage: React.FC<LazyImageProps> = ({
   useEffect(() => {
     if (priority === 'high') {
       // High priority images load immediately
+      console.log('LazyImage: High priority image, loading immediately:', source);
       setIsVisible(true);
       setHasBeenVisible(true);
       return;
@@ -49,6 +50,7 @@ const LazyImage: React.FC<LazyImageProps> = ({
       if (typeof source === 'object' && source.uri) {
         const cached = await cacheService.get<boolean>(`image_loaded_${source.uri}`);
         if (cached) {
+          console.log('LazyImage: Image found in cache:', source.uri);
           setImageLoaded(true);
           setIsVisible(true);
           setHasBeenVisible(true);
@@ -65,10 +67,20 @@ const LazyImage: React.FC<LazyImageProps> = ({
             pageY + height > -threshold;
 
           if (isInViewport && !hasBeenVisible) {
+            console.log('LazyImage: Image entered viewport:', source);
             setIsVisible(true);
             setHasBeenVisible(true);
           }
         });
+      } else {
+        // If measure fails, load anyway after a short delay
+        console.log('LazyImage: Could not measure view, loading after delay:', source);
+        setTimeout(() => {
+          if (!hasBeenVisible) {
+            setIsVisible(true);
+            setHasBeenVisible(true);
+          }
+        }, 500);
       }
     };
 

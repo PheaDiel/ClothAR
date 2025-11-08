@@ -94,11 +94,16 @@ const ProductManagementScreen = () => {
           style: 'destructive',
           onPress: async () => {
             try {
-              // TODO: Implement actual delete API call
-              // For now, just remove from local state
-              setProducts(products.filter(p => p.id !== product.id));
-              Alert.alert('Success', 'Product deleted successfully');
+              const result = await ProductService.deleteProduct(product.id);
+              if (result.success) {
+                // Remove from local state
+                setProducts(products.filter(p => p.id !== product.id));
+                Alert.alert('Success', 'Product deleted successfully');
+              } else {
+                Alert.alert('Error', result.error || 'Failed to delete product');
+              }
             } catch (error) {
+              console.error('Delete product error:', error);
               Alert.alert('Error', 'Failed to delete product');
             }
           }

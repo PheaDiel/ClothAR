@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,8 @@ import {
   Alert,
   Image,
   ActivityIndicator,
+  PanResponder,
+  Dimensions,
 } from 'react-native';
 import { TextInput, Button, Card, Title, Chip, FAB, Portal, Modal } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,7 +19,6 @@ import { hp, wp, rf } from '../../utils/responsiveUtils';
 import Loading from '../../components/Loading';
 import { StorageService } from '../../services/storageService';
 import { ProductService } from '../../services/productService';
-import * as ImageManipulator from 'expo-image-manipulator';
 
 interface AnchorPoint {
   name: string;
@@ -53,13 +54,13 @@ const AddEditProductScreen = () => {
   const [uploadingImages, setUploadingImages] = useState(false);
   const [imagePickerVisible, setImagePickerVisible] = useState(false);
   const [currentImageType, setCurrentImageType] = useState<'product' | 'virtual'>('product');
-  const [imageScale, setImageScale] = useState(1);
-  const [showScaleModal, setShowScaleModal] = useState(false);
-  const [scalingImage, setScalingImage] = useState<string | null>(null);
   const [selectedImageForAnchors, setSelectedImageForAnchors] = useState<number | null>(null);
   const [showAnchorModal, setShowAnchorModal] = useState(false);
   const [anchorPoints, setAnchorPoints] = useState<AnchorPoint[]>([]);
   const [imageDimensions, setImageDimensions] = useState<{ width: number; height: number } | null>(null);
+  const [draggingPoint, setDraggingPoint] = useState<number | null>(null);
+  const [selectedPoint, setSelectedPoint] = useState<number | null>(null);
+  const imageContainerRef = useRef<View>(null);
 
   const [productData, setProductData] = useState<Product>({
     name: '',
@@ -108,14 +109,26 @@ const AddEditProductScreen = () => {
 
     setLoading(true);
     try {
+      // Prepare product data for saving (remove fabric_ids if not supported by database)
+      const productDataToSave = {
+        name: productData.name,
+        description: productData.description,
+        category: productData.category,
+        base_price: productData.base_price,
+        images: productData.images,
+        virtual_tryon_images: productData.virtual_tryon_images,
+        fabric_ids: [], // Empty array since fabric_ids is not in products table
+        is_active: productData.is_active,
+      };
+
       let result;
 
       if (product) {
         // Update existing product
-        result = await ProductService.updateProduct(product.id, productData);
+        result = await ProductService.updateProduct(product.id, productDataToSave);
       } else {
         // Create new product
-        result = await ProductService.createProduct(productData);
+        result = await ProductService.createProduct(productDataToSave);
       }
 
       if (result.success) {
@@ -248,42 +261,6 @@ const AddEditProductScreen = () => {
     }
   };
 
-  const scaleImage = async (imageUri: string) => {
-    try {
-      setScalingImage(imageUri);
-      const scaledImage = await ImageManipulator.manipulateAsync(
-        imageUri,
-        [{ resize: { width: 800 * imageScale, height: 800 * imageScale } }],
-        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
-      );
-
-      // Replace the image in the state
-      const isVirtual = productData.virtual_tryon_images.includes(imageUri);
-      if (isVirtual) {
-        setProductData(prev => ({
-          ...prev,
-          virtual_tryon_images: prev.virtual_tryon_images.map(img =>
-            img === imageUri ? scaledImage.uri : img
-          ),
-        }));
-      } else {
-        setProductData(prev => ({
-          ...prev,
-          images: prev.images.map(img =>
-            img === imageUri ? scaledImage.uri : img
-          ),
-        }));
-      }
-
-      setShowScaleModal(false);
-      setScalingImage(null);
-      Alert.alert('Success', 'Image scaled successfully');
-    } catch (error) {
-      console.error('Scale image error:', error);
-      Alert.alert('Error', 'Failed to scale image');
-      setScalingImage(null);
-    }
-  };
 
   const removeImage = async (index: number, isVirtualTryOn = false) => {
     const images = isVirtualTryOn ? productData.virtual_tryon_images : productData.images;
@@ -390,6 +367,32 @@ const AddEditProductScreen = () => {
 
   const removeAnchorPoint = (index: number) => {
     setAnchorPoints(prev => prev.filter((_, i) => i !== index));
+    if (selectedPoint === index) {
+      setSelectedPoint(null);
+    }
+  };
+
+  const handleImagePress = (event: any) => {
+    if (!imageDimensions || selectedImageForAnchors === null) return;
+
+    const { locationX, locationY } = event.nativeEvent;
+    const imageRect = {
+      width: 300,
+      height: 300 * (imageDimensions.height / imageDimensions.width)
+    };
+
+    // Convert screen coordinates to image coordinates
+    const imageX = (locationX / imageRect.width) * imageDimensions.width;
+    const imageY = (locationY / imageRect.height) * imageDimensions.height;
+
+    // If we have a selected point, move it
+    if (selectedPoint !== null) {
+      updateAnchorPoint(selectedPoint, { x: imageX, y: imageY });
+    }
+  };
+
+  const handleAnchorPointPress = (index: number) => {
+    setSelectedPoint(selectedPoint === index ? null : index);
   };
 
   const saveAnchorPoints = () => {
@@ -475,57 +478,6 @@ const AddEditProductScreen = () => {
         </Modal>
       </Portal>
 
-      {/* Image Scale Modal */}
-      <Portal>
-        <Modal
-          visible={showScaleModal}
-          onDismiss={() => setShowScaleModal(false)}
-          contentContainerStyle={styles.modalContainer}
-        >
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Scale Image</Text>
-            <Text style={styles.modalSubtitle}>
-              Adjust the scale factor for the image
-            </Text>
-
-            <View style={styles.scaleContainer}>
-              <TouchableOpacity
-                style={styles.scaleButtonControl}
-                onPress={() => setImageScale(Math.max(0.1, imageScale - 0.1))}
-              >
-                <Ionicons name="remove" size={24} color={theme.colors.primary} />
-              </TouchableOpacity>
-
-              <Text style={styles.scaleText}>{imageScale.toFixed(1)}x</Text>
-
-              <TouchableOpacity
-                style={styles.scaleButtonControl}
-                onPress={() => setImageScale(Math.min(3.0, imageScale + 0.1))}
-              >
-                <Ionicons name="add" size={24} color={theme.colors.primary} />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.scaleActions}>
-              <Button
-                mode="outlined"
-                onPress={() => setShowScaleModal(false)}
-                style={styles.scaleCancelButton}
-              >
-                Cancel
-              </Button>
-              <Button
-                mode="contained"
-                onPress={() => scalingImage && scaleImage(scalingImage)}
-                style={styles.scaleApplyButton}
-                loading={scalingImage !== null}
-              >
-                Apply Scale
-              </Button>
-            </View>
-          </View>
-        </Modal>
-      </Portal>
 
       {/* Anchor Points Modal */}
       <Portal>
@@ -537,31 +489,54 @@ const AddEditProductScreen = () => {
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Define Anchor Points</Text>
             <Text style={styles.modalSubtitle}>
-              Click on the image to add anchor points that will align with body landmarks
+              Tap anchor points to select them, then tap the image to move them. Use the remove button to delete selected points.
             </Text>
 
             {imageDimensions && selectedImageForAnchors !== null && (
               <View style={styles.anchorImageContainer}>
-                <Image
-                  source={{ uri: productData.virtual_tryon_images[selectedImageForAnchors] }}
-                  style={[styles.anchorImage, { width: 300, height: 300 * (imageDimensions.height / imageDimensions.width) }]}
-                  resizeMode="contain"
-                />
-                {anchorPoints.map((point, index) => (
-                  <TouchableOpacity
-                    key={index}
-                    style={[
-                      styles.anchorPoint,
-                      {
-                        left: (point.x / imageDimensions.width) * 300 - 8,
-                        top: (point.y / imageDimensions.height) * (300 * (imageDimensions.height / imageDimensions.width)) - 8,
-                      }
-                    ]}
-                    onPress={() => removeAnchorPoint(index)}
-                  >
-                    <Text style={styles.anchorPointLabel}>{point.type.charAt(0).toUpperCase()}</Text>
-                  </TouchableOpacity>
-                ))}
+                <TouchableOpacity
+                  style={styles.anchorImageTouchable}
+                  onPress={handleImagePress}
+                  activeOpacity={1}
+                >
+                  <Image
+                    source={{ uri: productData.virtual_tryon_images[selectedImageForAnchors] }}
+                    style={[styles.anchorImage, { width: 300, height: 300 * (imageDimensions.height / imageDimensions.width) }]}
+                    resizeMode="contain"
+                  />
+                  {anchorPoints.map((point, index) => (
+                    <View key={index} style={styles.anchorPointContainer}>
+                      <TouchableOpacity
+                        style={[
+                          styles.anchorPoint,
+                          {
+                            left: (point.x / imageDimensions.width) * 300 - 8,
+                            top: (point.y / imageDimensions.height) * (300 * (imageDimensions.height / imageDimensions.width)) - 8,
+                            borderColor: selectedPoint === index ? theme.colors.error : 'white',
+                            borderWidth: selectedPoint === index ? 3 : 2,
+                          }
+                        ]}
+                        onPress={() => handleAnchorPointPress(index)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.anchorPointLabel}>{point.type.charAt(0).toUpperCase()}</Text>
+                      </TouchableOpacity>
+                      {selectedPoint === index && (
+                        <TouchableOpacity
+                          style={styles.removeAnchorButton}
+                          onPress={() => removeAnchorPoint(index)}
+                        >
+                          <Ionicons name="close-circle" size={16} color={theme.colors.error} />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  ))}
+                </TouchableOpacity>
+                {selectedPoint !== null && (
+                  <Text style={styles.selectedPointText}>
+                    Selected: {anchorPoints[selectedPoint]?.type} - Tap image to move, use remove button to delete
+                  </Text>
+                )}
               </View>
             )}
 
@@ -679,15 +654,6 @@ const AddEditProductScreen = () => {
                   <Image source={{ uri: image }} style={styles.image} />
                   <View style={styles.imageControls}>
                     <TouchableOpacity
-                      style={styles.scaleButton}
-                      onPress={() => {
-                        setScalingImage(image);
-                        setShowScaleModal(true);
-                      }}
-                    >
-                      <Ionicons name="resize" size={16} color={theme.colors.primary} />
-                    </TouchableOpacity>
-                    <TouchableOpacity
                       style={styles.removeImageButton}
                       onPress={() => removeImage(index)}
                     >
@@ -734,15 +700,6 @@ const AddEditProductScreen = () => {
                           size={16}
                           color={hasAnchors ? theme.colors.success : theme.colors.warning}
                         />
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.scaleButton}
-                        onPress={() => {
-                          setScalingImage(image);
-                          setShowScaleModal(true);
-                        }}
-                      >
-                        <Ionicons name="resize" size={16} color={theme.colors.primary} />
                       </TouchableOpacity>
                       <TouchableOpacity
                         style={styles.removeImageButton}
@@ -978,44 +935,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: wp(1),
   },
-  scaleButton: {
-    backgroundColor: theme.colors.surface,
-    borderRadius: wp(6),
-    padding: wp(1),
-    elevation: 2,
-  },
-  scaleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginVertical: hp(3),
-    gap: wp(4),
-  },
-  scaleButtonControl: {
-    backgroundColor: theme.colors.background,
-    borderRadius: wp(6),
-    padding: wp(2),
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-  },
-  scaleText: {
-    fontSize: rf(18),
-    fontWeight: 'bold',
-    color: theme.colors.textPrimary,
-    minWidth: wp(15),
-    textAlign: 'center',
-  },
-  scaleActions: {
-    flexDirection: 'row',
-    gap: wp(3),
-    marginTop: hp(2),
-  },
-  scaleCancelButton: {
-    flex: 1,
-  },
-  scaleApplyButton: {
-    flex: 1,
-  },
   anchorButton: {
     backgroundColor: theme.colors.surface,
     borderRadius: wp(6),
@@ -1108,6 +1027,27 @@ const styles = StyleSheet.create({
   },
   anchorSaveButton: {
     flex: 1,
+  },
+  anchorImageTouchable: {
+    position: 'relative',
+  },
+  anchorPointContainer: {
+    position: 'absolute',
+  },
+  removeAnchorButton: {
+    position: 'absolute',
+    top: -12,
+    right: -12,
+    backgroundColor: theme.colors.surface,
+    borderRadius: wp(6),
+    elevation: 3,
+  },
+  selectedPointText: {
+    fontSize: rf(12),
+    color: theme.colors.textSecondary,
+    textAlign: 'center',
+    marginTop: hp(1),
+    fontStyle: 'italic',
   },
 });
 

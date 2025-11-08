@@ -201,15 +201,44 @@ const CustomerManagementScreen = () => {
 
   const handleUpdateRoleStatus = async (customer: Customer, newStatus: 'approved' | 'rejected') => {
     try {
-      // TODO: Implement actual role status update API call
-      // For now, just update local state
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        Alert.alert('Error', 'User not authenticated');
+        return;
+      }
+
+      // Check if user is admin
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+
+      if (!['admin'].includes(profile?.role)) {
+        Alert.alert('Error', 'Unauthorized to update role status. Admin access required.');
+        return;
+      }
+
+      // Update role status in database
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          role_status: newStatus,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', customer.id);
+
+      if (error) throw error;
+
+      // Update local state
       const updatedCustomers = customers.map(c =>
         c.id === customer.id ? { ...c, role_status: newStatus } : c
       );
       setCustomers(updatedCustomers);
       Alert.alert('Success', `Customer role status updated to ${newStatus}`);
-    } catch (error) {
-      Alert.alert('Error', 'Failed to update role status');
+    } catch (error: any) {
+      console.error('Error updating role status:', error);
+      Alert.alert('Error', `Failed to update role status: ${error.message}`);
     }
   };
 
